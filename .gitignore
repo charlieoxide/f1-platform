@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+data/raw/*
+data/processed/*
+data/f1.db
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+.pytest_cache/
+.ruff_cache/
+*.log
+models/*.onnx
+models/*.h5
+models/*.pt
+!models/.gitkeep
+.DS_Store
