@@ -20,7 +20,7 @@ from src.config import settings
 
 Path(settings.db_path).parent.mkdir(parents=True, exist_ok=True)
 
-engine = create_engine(f"sqlite:///{settings.db_path}", future=True)
+engine = create_engine(f"sqlite:///{settings.db_path}")
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base = declarative_base()
 
