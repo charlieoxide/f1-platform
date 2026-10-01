@@ -14,7 +14,7 @@ ingest:
 	python -m src.ingest --session "$(RACE)"
 
 dashboard:
-	streamlit run src/dashboard.py
+	PYTHONPATH=. python -m streamlit run src/dashboard.py
 
 api:
 	uvicorn src.api:app --reload

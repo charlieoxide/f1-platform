@@ -15,3 +15,7 @@ models/*.h5
 models/*.pt
 !models/.gitkeep
 .DS_Store
+
+# Streamlit's auto-installed agent skills (environment-specific symlinks)
+.agents/skills/developing-with-streamlit
+.claude/skills/developing-with-streamlit

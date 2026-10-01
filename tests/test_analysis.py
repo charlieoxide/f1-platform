@@ -73,3 +73,21 @@ def test_tyre_stints_splits_by_stint_and_labels_compound() -> None:
 def test_tyre_stints_empty_when_no_stint_data() -> None:
     df = _sample_df().assign(stint=None)
     assert tyre_stints(df, "VER").empty
+
+
+def test_red_flag_lap_excluded_from_charts_but_not_mutated_elsewhere() -> None:
+    df = _sample_df()
+    df.loc[len(df)] = {
+        "driver": "VER",
+        "lap": 4,
+        "lap_time_s": 2494.8,
+        "compound": "HARD",
+        "stint": 2,
+    }
+    pace = pace_comparison(df, "VER", "HAM")
+    assert 4 not in pace.index  # the red-flag-inflated lap never reaches the chart
+
+    stints = tyre_stints(df, "VER")
+    assert (
+        stints["Stint 2 (HARD)"].max() < 200
+    )  # outlier excluded, real stint data kept
