@@ -10,6 +10,7 @@ from collections import defaultdict
 
 from fastapi import FastAPI, Header, HTTPException
 
+from src.chatbot import answer_question
 from src.config import settings
 from src.logging_conf import setup_logging
 
@@ -54,5 +55,4 @@ def chat(query: dict, x_api_key: str | None = Header(default=None)) -> dict:
     if not question:
         raise HTTPException(status_code=400, detail="Missing 'question'")
 
-    # Placeholder — wire to text-to-SQL / RAG module here.
-    return {"answer": f"(stub) received: {question}"}
+    return answer_question(question)

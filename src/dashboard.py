@@ -7,6 +7,8 @@ import streamlit as st
 from sqlalchemy import select
 
 from src.analysis import pace_comparison, tyre_stints
+from src.chatbot import answer_question
+from src.config import settings
 from src.db import Lap, SessionLocal, init_db
 
 st.set_page_config(page_title="F1 Unified Platform", layout="wide")
@@ -61,3 +63,19 @@ else:
 
 with st.expander("Raw laps"):
     st.dataframe(df.sort_values(["driver", "lap"]))
+
+st.subheader("Ask the data")
+if not settings.openrouter_api_key:
+    st.info("Set OPENROUTER_API_KEY in .env to enable the chatbot.")
+else:
+    question = st.text_input(
+        "e.g. 'Who had the five fastest laps and what were their times?'"
+    )
+    if question:
+        with st.spinner("Querying..."):
+            result = answer_question(question, api_key=settings.openrouter_api_key)
+        st.code(result["sql"], language="sql")
+        if result["error"]:
+            st.error(result["error"])
+        else:
+            st.dataframe(result["rows"])
