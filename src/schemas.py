@@ -42,7 +42,10 @@ class RaceControlMessage(BaseModel):
 class ResultRecord(BaseModel):
     """One driver's classification for one session. For a race: grid
     position, finishing position, points, status (Finished/Retired/etc).
-    For qualifying: position is the quali result; grid/points are null."""
+    For qualifying: position is the quali result; grid/points are null.
+    event_date orders sessions chronologically for "recent form" features
+    in the predictor — without it, rolling-average features aren't
+    computable at all."""
 
     session_key: str
     session_type: str  # 'Q' or 'R'
@@ -51,6 +54,7 @@ class ResultRecord(BaseModel):
     grid_position: int | None = Field(default=None, ge=0)
     points: float = Field(default=0.0, ge=0)
     status: str | None = None
+    event_date: datetime | None = None
 
     @field_validator("driver")
     @classmethod

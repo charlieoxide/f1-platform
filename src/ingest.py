@@ -82,10 +82,13 @@ def laps_to_records(
 
 
 def results_to_records(
-    session_key: str, session_type: str, results_df: pd.DataFrame
+    session_key: str,
+    session_type: str,
+    results_df: pd.DataFrame,
+    event_date=None,
 ) -> tuple[list[ResultRecord], int]:
     """Same validate-and-skip pattern as laps_to_records, for the results
-    table (grid/finishing position, points, status)."""
+    table (grid/finishing position, points, status, event_date)."""
     records: list[ResultRecord] = []
     skipped = 0
     for _, row in results_df.iterrows():
@@ -102,6 +105,7 @@ def results_to_records(
                     grid_position=int(grid) if grid is not None else None,
                     points=float(points) if points is not None else 0.0,
                     status=_clean(row.get("Status")),
+                    event_date=event_date,
                 )
             )
         except (ValidationError, ValueError, TypeError, KeyError) as e:
@@ -123,9 +127,14 @@ def ingest_laps(session_key: str, laps_df: pd.DataFrame) -> int:
 
 
 def ingest_results(
-    session_key: str, session_type: str, results_df: pd.DataFrame
+    session_key: str,
+    session_type: str,
+    results_df: pd.DataFrame,
+    event_date=None,
 ) -> int:
-    records, skipped = results_to_records(session_key, session_type, results_df)
+    records, skipped = results_to_records(
+        session_key, session_type, results_df, event_date=event_date
+    )
     with SessionLocal.begin() as db:
         db.execute(delete(Result).where(Result.session_key == session_key))
         db.add_all(Result(**r.model_dump()) for r in records)
@@ -147,8 +156,11 @@ def main() -> None:
     session_key = f"{year}_{event.replace(' ', '')}_{session_type}"
 
     session = fetch_session(year, event, session_type)
+    event_date = getattr(session, "date", None)
     lap_count = ingest_laps(session_key, session.laps)
-    result_count = ingest_results(session_key, session_type, session.results)
+    result_count = ingest_results(
+        session_key, session_type, session.results, event_date=event_date
+    )
     print(f"Done: {lap_count} laps, {result_count} results stored for {session_key}")
 
 

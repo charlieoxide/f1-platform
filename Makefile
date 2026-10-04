@@ -13,6 +13,9 @@ test: lint
 ingest:
 	python -m src.ingest --session "$(RACE)"
 
+train:
+	python -m src.predictor
+
 dashboard:
 	PYTHONPATH=. python -m streamlit run src/dashboard.py
 
