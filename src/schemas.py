@@ -37,3 +37,22 @@ class RaceControlMessage(BaseModel):
     category: str | None = None
     message: str = Field(min_length=1)
     time: datetime | None = None
+
+
+class ResultRecord(BaseModel):
+    """One driver's classification for one session. For a race: grid
+    position, finishing position, points, status (Finished/Retired/etc).
+    For qualifying: position is the quali result; grid/points are null."""
+
+    session_key: str
+    session_type: str  # 'Q' or 'R'
+    driver: str = Field(min_length=1, max_length=3)
+    position: int | None = Field(default=None, ge=1)
+    grid_position: int | None = Field(default=None, ge=0)
+    points: float = Field(default=0.0, ge=0)
+    status: str | None = None
+
+    @field_validator("driver")
+    @classmethod
+    def upper(cls, v: str) -> str:
+        return v.upper()

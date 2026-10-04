@@ -1,6 +1,6 @@
 import pandas as pd
 
-from src.ingest import laps_to_records, parse_session_arg
+from src.ingest import laps_to_records, parse_session_arg, results_to_records
 
 
 def test_parse_session_arg() -> None:
@@ -42,3 +42,36 @@ def test_laps_to_records_handles_nan_and_bad_rows() -> None:
     assert records[0].lap_time_seconds == 80.5 and records[0].is_personal_best
     assert records[1].lap_time_seconds is None and records[1].compound is None
     assert records[1].is_personal_best is False
+
+
+def test_results_to_records_handles_dnf_and_normal_finish() -> None:
+    df = pd.DataFrame(
+        [
+            {  # normal finish
+                "Abbreviation": "VER",
+                "Position": 1.0,
+                "GridPosition": 1.0,
+                "Points": 25.0,
+                "Status": "Finished",
+            },
+            {  # DNF: no finishing position, but grid position still exists
+                "Abbreviation": "PER",
+                "Position": float("nan"),
+                "GridPosition": 5.0,
+                "Points": 0.0,
+                "Status": "Accident",
+            },
+            {  # garbage: no driver code at all
+                "Abbreviation": "",
+                "Position": 3.0,
+                "GridPosition": 3.0,
+                "Points": 15.0,
+                "Status": "Finished",
+            },
+        ]
+    )
+    records, skipped = results_to_records("2024_Monaco_R", "R", df)
+    assert len(records) == 2 and skipped == 1
+    assert records[0].driver == "VER" and records[0].position == 1
+    assert records[1].driver == "PER" and records[1].position is None
+    assert records[1].grid_position == 5

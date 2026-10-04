@@ -2,7 +2,9 @@
 
 Every write goes through here: validated first (schemas.py), transactional,
 idempotent (re-running a session replaces its rows), with a logged failure
-path if the live pull fails.
+path if the live pull fails. Pulls both laps and session results (grid/
+finishing position, points, status) - results are what the Module 4
+predictor trains on.
 
 Usage:
     python -m src.ingest --session "2024 Monaco R"
@@ -20,9 +22,9 @@ from pydantic import ValidationError
 from sqlalchemy import delete
 
 from src.config import settings
-from src.db import Lap, SessionLocal, init_db
+from src.db import Lap, Result, SessionLocal, init_db
 from src.logging_conf import setup_logging
-from src.schemas import LapRecord
+from src.schemas import LapRecord, ResultRecord
 
 logger = logging.getLogger(__name__)
 
@@ -38,13 +40,13 @@ def parse_session_arg(arg: str) -> tuple[int, str, str]:
     return int(year_str), " ".join(rest), session_type
 
 
-def fetch_session(year: int, event: str, session_type: str) -> pd.DataFrame:
+def fetch_session(year: int, event: str, session_type: str):
     Path(settings.fastf1_cache_dir).mkdir(parents=True, exist_ok=True)
     fastf1.Cache.enable_cache(settings.fastf1_cache_dir)
     try:
         session = fastf1.get_session(year, event, session_type)
         session.load(telemetry=False, weather=False, messages=False)
-        return session.laps
+        return session
     except Exception:  # noqa: BLE001 - log full context, then re-raise
         logger.exception("FastF1 pull failed for %s %s %s", year, event, session_type)
         raise
@@ -79,6 +81,35 @@ def laps_to_records(
     return records, skipped
 
 
+def results_to_records(
+    session_key: str, session_type: str, results_df: pd.DataFrame
+) -> tuple[list[ResultRecord], int]:
+    """Same validate-and-skip pattern as laps_to_records, for the results
+    table (grid/finishing position, points, status)."""
+    records: list[ResultRecord] = []
+    skipped = 0
+    for _, row in results_df.iterrows():
+        try:
+            position = _clean(row.get("Position"))
+            grid = _clean(row.get("GridPosition"))
+            points = _clean(row.get("Points"))
+            records.append(
+                ResultRecord(
+                    session_key=session_key,
+                    session_type=session_type,
+                    driver=str(row.get("Abbreviation", "")),
+                    position=int(position) if position is not None else None,
+                    grid_position=int(grid) if grid is not None else None,
+                    points=float(points) if points is not None else 0.0,
+                    status=_clean(row.get("Status")),
+                )
+            )
+        except (ValidationError, ValueError, TypeError, KeyError) as e:
+            skipped += 1
+            logger.warning("Skipping invalid result row: %s", e)
+    return records, skipped
+
+
 def ingest_laps(session_key: str, laps_df: pd.DataFrame) -> int:
     records, skipped = laps_to_records(session_key, laps_df)
     # One transaction: replace this session's laps atomically.
@@ -87,6 +118,19 @@ def ingest_laps(session_key: str, laps_df: pd.DataFrame) -> int:
         db.add_all(Lap(**r.model_dump()) for r in records)
     logger.info(
         "Ingested %d laps (%d skipped) for %s", len(records), skipped, session_key
+    )
+    return len(records)
+
+
+def ingest_results(
+    session_key: str, session_type: str, results_df: pd.DataFrame
+) -> int:
+    records, skipped = results_to_records(session_key, session_type, results_df)
+    with SessionLocal.begin() as db:
+        db.execute(delete(Result).where(Result.session_key == session_key))
+        db.add_all(Result(**r.model_dump()) for r in records)
+    logger.info(
+        "Ingested %d results (%d skipped) for %s", len(records), skipped, session_key
     )
     return len(records)
 
@@ -102,9 +146,10 @@ def main() -> None:
     year, event, session_type = parse_session_arg(args.session)
     session_key = f"{year}_{event.replace(' ', '')}_{session_type}"
 
-    laps_df = fetch_session(year, event, session_type)
-    count = ingest_laps(session_key, laps_df)
-    print(f"Done: {count} laps stored for {session_key}")
+    session = fetch_session(year, event, session_type)
+    lap_count = ingest_laps(session_key, session.laps)
+    result_count = ingest_results(session_key, session_type, session.results)
+    print(f"Done: {lap_count} laps, {result_count} results stored for {session_key}")
 
 
 if __name__ == "__main__":

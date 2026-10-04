@@ -38,6 +38,19 @@ class Lap(Base):
     is_personal_best = Column(Boolean, default=False)
 
 
+class Result(Base):
+    __tablename__ = "results"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_key = Column(String, index=True, nullable=False)
+    session_type = Column(String, nullable=False)
+    driver = Column(String(3), index=True, nullable=False)
+    position = Column(Integer, nullable=True)
+    grid_position = Column(Integer, nullable=True)
+    points = Column(Float, default=0.0)
+    status = Column(String, nullable=True)
+
+
 class RaceControl(Base):
     __tablename__ = "race_control"
 
