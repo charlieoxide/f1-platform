@@ -40,12 +40,40 @@ def parse_session_arg(arg: str) -> tuple[int, str, str]:
     return int(year_str), " ".join(rest), session_type
 
 
+class EventMismatchError(ValueError):
+    """FastF1 fuzzy-matched the requested event name to something that
+    doesn't actually correspond to it. Silently continuing would ingest
+    the wrong race's data under the requested race's label - exactly the
+    kind of thing the integrity layer exists to catch."""
+
+
+def _check_event_match(requested_event: str, session) -> None:
+    actual_name = str(session.event.get("EventName", ""))
+    actual_location = str(session.event.get("Location", ""))
+    requested = requested_event.lower()
+    haystack = f"{actual_name} {actual_location}".lower()
+
+    # Loose on purpose: "Saudi Arabia" should match "Saudi Arabian Grand
+    # Prix" (one word rewritten), "Monaco" should match "Monaco Grand
+    # Prix" (exact substring). What it must NOT do is accept a completely
+    # different event FastF1's fuzzy matcher guessed at.
+    requested_words = [w for w in requested.split() if len(w) > 3]
+    if requested_words and not any(w in haystack for w in requested_words):
+        raise EventMismatchError(
+            f"Requested event '{requested_event}' does not match what "
+            f"FastF1 actually loaded ('{actual_name}'). This usually means "
+            "FastF1's fuzzy name matching picked the wrong race - use the "
+            "exact official event name or a round number instead."
+        )
+
+
 def fetch_session(year: int, event: str, session_type: str):
     Path(settings.fastf1_cache_dir).mkdir(parents=True, exist_ok=True)
     fastf1.Cache.enable_cache(settings.fastf1_cache_dir)
     try:
         session = fastf1.get_session(year, event, session_type)
         session.load(telemetry=False, weather=False, messages=False)
+        _check_event_match(event, session)
         return session
     except Exception:  # noqa: BLE001 - log full context, then re-raise
         logger.exception("FastF1 pull failed for %s %s %s", year, event, session_type)

@@ -23,7 +23,7 @@ EVENTS=(
   "Canada"
   "Spain"
   "Austria"
-  "Great Britain"
+  "Silverstone"
 )
 
 for event in "${EVENTS[@]}"; do

@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from src.ingest import laps_to_records, parse_session_arg, results_to_records
 
@@ -75,3 +76,33 @@ def test_results_to_records_handles_dnf_and_normal_finish() -> None:
     assert records[0].driver == "VER" and records[0].position == 1
     assert records[1].driver == "PER" and records[1].position is None
     assert records[1].grid_position == 5
+
+
+class _FakeEvent(dict):
+    """Mimics session.event's dict-like interface closely enough for
+    _check_event_match without needing a real FastF1 session."""
+
+
+class _FakeSession:
+    def __init__(self, event_name: str, location: str) -> None:
+        self.event = _FakeEvent(EventName=event_name, Location=location)
+
+
+def test_check_event_match_accepts_reasonable_match() -> None:
+    from src.ingest import _check_event_match
+
+    _check_event_match("Monaco", _FakeSession("Monaco Grand Prix", "Monte Carlo"))
+    _check_event_match(
+        "Saudi Arabia", _FakeSession("Saudi Arabian Grand Prix", "Jeddah")
+    )
+
+
+def test_check_event_match_rejects_wrong_event_from_fuzzy_match_failure() -> None:
+    """Reproduces exactly what happened on a real machine: requesting
+    'Great Britain' and FastF1 silently handing back Austria instead."""
+    from src.ingest import EventMismatchError, _check_event_match
+
+    with pytest.raises(EventMismatchError):
+        _check_event_match(
+            "Great Britain", _FakeSession("Austrian Grand Prix", "Spielberg")
+        )

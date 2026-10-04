@@ -19,3 +19,7 @@ models/*.pt
 # Streamlit's auto-installed agent skills (environment-specific symlinks)
 .agents/skills/developing-with-streamlit
 .claude/skills/developing-with-streamlit
+
+# Stray output-redirect files (e.g. `make train >> output.txt`)
+*Output.txt
+*output.txt
