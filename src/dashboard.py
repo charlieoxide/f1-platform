@@ -10,6 +10,7 @@ from src.analysis import pace_comparison, tyre_stints
 from src.chatbot import answer_question
 from src.config import settings
 from src.db import Lap, SessionLocal, init_db
+from src.summarizer import summarize_race
 
 st.set_page_config(page_title="F1 Unified Platform", layout="wide")
 st.title("F1 Unified Platform")
@@ -63,6 +64,19 @@ else:
 
 with st.expander("Raw laps"):
     st.dataframe(df.sort_values(["driver", "lap"]))
+
+st.subheader("Race summary")
+if not settings.openrouter_api_key:
+    st.info("Set OPENROUTER_API_KEY in .env to enable the race summary.")
+elif st.button("Generate summary for this session"):
+    with st.spinner("Summarizing..."):
+        summary_result = summarize_race(session, api_key=settings.openrouter_api_key)
+    if summary_result["error"]:
+        st.error(summary_result["error"])
+    else:
+        st.write(summary_result["summary"])
+        with st.expander("Facts this was grounded in"):
+            st.json(summary_result["facts"])
 
 st.subheader("Ask the data")
 if not settings.openrouter_api_key:
