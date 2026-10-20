@@ -3,7 +3,18 @@ import sqlite3
 import httpx
 import pytest
 
-from src.summarizer import generate_summary, get_race_facts, summarize_race
+from src.summarizer import (
+    MAX_ATTEMPTS,
+    generate_summary,
+    get_race_facts,
+    is_usable_summary,
+    summarize_race,
+)
+
+GOOD_SUMMARY = (
+    "HAM won the race from second on the grid, finishing ahead of VER and "
+    "NOR, while PER retired after an accident."
+)
 
 
 def _make_temp_db(tmp_path) -> str:
@@ -16,7 +27,8 @@ def _make_temp_db(tmp_path) -> str:
     )
     conn.execute(
         "CREATE TABLE laps (session_key TEXT, driver TEXT, lap_number INTEGER, "
-        "lap_time_seconds REAL, compound TEXT, stint INTEGER, is_personal_best INTEGER)"
+        "lap_time_seconds REAL, compound TEXT, stint INTEGER, "
+        "is_personal_best INTEGER)"
     )
     conn.executemany(
         "INSERT INTO results VALUES (?,?,?,?,?,?,?,?)",
@@ -41,92 +53,124 @@ def _make_temp_db(tmp_path) -> str:
 
 
 def test_get_race_facts_orders_podium_and_counts_dnfs(tmp_path) -> None:
-    db_path = _make_temp_db(tmp_path)
-    facts = get_race_facts("k", db_path=db_path)
-
+    facts = get_race_facts("k", db_path=_make_temp_db(tmp_path))
     assert [r["driver"] for r in facts["podium"]] == ["HAM", "VER", "NOR"]
     assert facts["dnf_count"] == 1
     assert len(facts["full_classification"]) == 4
 
 
-def test_get_race_facts_excludes_red_flag_inflated_lap(tmp_path) -> None:
-    """Same bug class as Module 1's tyre chart: a red-flag-stopped lap must
-    not be reported as the 'fastest lap' just because it has the biggest
-    recorded LapTime... wait, smallest is fastest - the point is the huge
-    outlier must not corrupt the MIN() calculation."""
-    db_path = _make_temp_db(tmp_path)
-    facts = get_race_facts("k", db_path=db_path)
-
+def test_get_race_facts_ignores_red_flag_inflated_lap(tmp_path) -> None:
+    """The 2494s lap (a red-flag stoppage folded into one lap) must not
+    leak into the fastest-lap fact; same guard as the dashboard charts."""
+    facts = get_race_facts("k", db_path=_make_temp_db(tmp_path))
     assert facts["fastest_lap"]["driver"] == "VER"
     assert facts["fastest_lap"]["lap_time"] == pytest.approx(87.9)
 
 
 def test_get_race_facts_handles_missing_session(tmp_path) -> None:
-    db_path = _make_temp_db(tmp_path)
-    facts = get_race_facts("does_not_exist", db_path=db_path)
+    facts = get_race_facts("nope", db_path=_make_temp_db(tmp_path))
     assert facts["full_classification"] == []
     assert facts["fastest_lap"] is None
 
 
-def test_summarize_race_no_results_returns_error_not_crash(tmp_path) -> None:
-    db_path = _make_temp_db(tmp_path)
-    result = summarize_race("does_not_exist", db_path=db_path, api_key="sk-fake")
+FACTS = {"podium": [{"driver": "HAM"}, {"driver": "VER"}, {"driver": "NOR"}]}
+
+
+@pytest.mark.parametrize(
+    "summary,expected",
+    [
+        (GOOD_SUMMARY, True),
+        ("User Safety: safe", False),  # the real failure: a classifier's reply
+        ("", False),
+        (None, False),
+        (
+            "The race was held on Sunday and it was a very exciting event overall.",
+            False,
+        ),
+    ],
+)
+def test_is_usable_summary(summary, expected) -> None:
+    assert is_usable_summary(summary, FACTS) is expected
+
+
+def test_summarize_race_no_results_returns_error(tmp_path) -> None:
+    result = summarize_race("nope", db_path=_make_temp_db(tmp_path), api_key="sk-x")
     assert result["summary"] is None
     assert "No race results" in result["error"]
 
 
-def test_summarize_race_without_api_key_returns_error_not_crash(tmp_path) -> None:
-    db_path = _make_temp_db(tmp_path)
-    result = summarize_race("k", db_path=db_path, api_key="")
+def test_summarize_race_without_api_key_returns_error(tmp_path) -> None:
+    result = summarize_race("k", db_path=_make_temp_db(tmp_path), api_key="")
     assert result["summary"] is None
     assert "OPENROUTER_API_KEY" in result["error"]
 
 
-def test_summarize_race_uses_generated_summary_without_calling_network(
-    tmp_path, monkeypatch
-) -> None:
-    db_path = _make_temp_db(tmp_path)
+def test_summarize_race_returns_valid_summary(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
-        "src.summarizer.generate_summary", lambda facts, api_key=None: "HAM won."
+        "src.summarizer.generate_summary", lambda facts, api_key=None: GOOD_SUMMARY
     )
-    result = summarize_race("k", db_path=db_path, api_key="sk-fake")
-    assert result["summary"] == "HAM won."
+    result = summarize_race("k", db_path=_make_temp_db(tmp_path), api_key="sk-x")
+    assert result["summary"] == GOOD_SUMMARY
     assert result["error"] is None
     assert result["facts"]["podium"][0]["driver"] == "HAM"
 
 
-def test_summarize_race_handles_401_without_crashing(tmp_path, monkeypatch) -> None:
-    db_path = _make_temp_db(tmp_path)
-
-    def fake_generate_summary(facts, api_key=None):
-        request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
-        response = httpx.Response(401, request=request)
-        raise httpx.HTTPStatusError("401", request=request, response=response)
-
-    monkeypatch.setattr("src.summarizer.generate_summary", fake_generate_summary)
-    result = summarize_race("k", db_path=db_path, api_key="sk-fake")
-    assert result["summary"] is None
-    assert "401" in result["error"] or "API key" in result["error"]
+def test_summarize_race_retries_after_junk_then_succeeds(tmp_path, monkeypatch) -> None:
+    """Reproduces the real bug: first the router returns 'User Safety:
+    safe', then a proper model answers. The junk must never be shown."""
+    replies = iter(["User Safety: safe", GOOD_SUMMARY])
+    monkeypatch.setattr(
+        "src.summarizer.generate_summary", lambda facts, api_key=None: next(replies)
+    )
+    result = summarize_race("k", db_path=_make_temp_db(tmp_path), api_key="sk-x")
+    assert result["summary"] == GOOD_SUMMARY
+    assert result["error"] is None
 
 
-def test_summarize_race_handles_network_failure_without_crashing(
+def test_summarize_race_gives_up_after_max_attempts_of_junk(
     tmp_path, monkeypatch
 ) -> None:
-    db_path = _make_temp_db(tmp_path)
+    calls = []
 
-    def fake_generate_summary(facts, api_key=None):
+    def junk(facts, api_key=None):
+        calls.append(1)
+        return "User Safety: safe"
+
+    monkeypatch.setattr("src.summarizer.generate_summary", junk)
+    result = summarize_race("k", db_path=_make_temp_db(tmp_path), api_key="sk-x")
+    assert result["summary"] is None
+    assert "unusable output" in result["error"]
+    assert len(calls) == MAX_ATTEMPTS
+
+
+def test_summarize_race_handles_401_without_retrying(tmp_path, monkeypatch) -> None:
+    calls = []
+
+    def fake(facts, api_key=None):
+        calls.append(1)
+        request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat")
+        raise httpx.HTTPStatusError(
+            "401", request=request, response=httpx.Response(401, request=request)
+        )
+
+    monkeypatch.setattr("src.summarizer.generate_summary", fake)
+    result = summarize_race("k", db_path=_make_temp_db(tmp_path), api_key="sk-x")
+    assert result["summary"] is None
+    assert "401" in result["error"]
+    assert len(calls) == 1  # an auth failure won't fix itself, so no retry
+
+
+def test_summarize_race_handles_network_failure(tmp_path, monkeypatch) -> None:
+    def fake(facts, api_key=None):
         raise httpx.ConnectError("refused")
 
-    monkeypatch.setattr("src.summarizer.generate_summary", fake_generate_summary)
-    result = summarize_race("k", db_path=db_path, api_key="sk-fake")
+    monkeypatch.setattr("src.summarizer.generate_summary", fake)
+    result = summarize_race("k", db_path=_make_temp_db(tmp_path), api_key="sk-x")
     assert result["summary"] is None
     assert result["error"] is not None
 
 
-def test_generate_summary_signature_accepts_api_key_kwarg() -> None:
-    # Just verifies the function signature matches what summarize_race
-    # calls - a real network call isn't exercised in the test suite.
+def test_generate_summary_accepts_api_key_kwarg() -> None:
     import inspect
 
-    sig = inspect.signature(generate_summary)
-    assert "api_key" in sig.parameters
+    assert "api_key" in inspect.signature(generate_summary).parameters

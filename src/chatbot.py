@@ -102,7 +102,7 @@ def generate_sql(question: str, api_key: str | None = None) -> str:
             # whichever free model is currently available, so this doesn't
             # break again when an individual :free model gets retired
             # (which is exactly what happened to the slug this replaced).
-            "model": "openrouter/free",
+            "model": settings.openrouter_model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0,
         },

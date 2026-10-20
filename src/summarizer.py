@@ -4,10 +4,17 @@ Same grounding rule as the chatbot (module 5): the LLM only ever writes
 prose from facts we retrieved from the database. It is never asked to
 recall or guess a race result from its own training data - the facts
 dict is the entire source of truth, and the prompt says so explicitly.
+
+LLM output is untrusted input, like any other external data here: the
+free auto-router can hand the request to an unsuitable model (a safety
+classifier once answered with just "User Safety: safe"), so every
+response is checked before it is shown, and retried if it fails.
 """
 
 from __future__ import annotations
 
+import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -16,6 +23,8 @@ import httpx
 from src.config import settings
 
 MAX_PLAUSIBLE_LAP_SECONDS = 200  # same red-flag-timing guard as analysis.py
+MAX_ATTEMPTS = 3
+MIN_SUMMARY_CHARS = 60
 
 
 def get_race_facts(session_key: str, db_path: str | None = None) -> dict:
@@ -60,82 +69,102 @@ def get_race_facts(session_key: str, db_path: str | None = None) -> dict:
         conn.close()
 
 
-def generate_summary(facts: dict, api_key: str | None = None) -> str:
-    """Call the LLM to turn the facts dict into readable prose. Isolated
-    behind this function so tests can monkeypatch it without hitting the
-    network - same pattern as chatbot.generate_sql."""
-    key = api_key if api_key is not None else settings.openrouter_api_key
-    prompt = (
-        "Write a short, factual race summary (3-5 sentences) using ONLY "
-        "the facts below. Do not invent anything not present here - if a "
-        "fact isn't in this data, don't mention it.\n\n"
-        f"Facts: {facts}\n\nSummary:"
+def is_usable_summary(summary: str | None, facts: dict) -> bool:
+    """A real summary is more than a few words and mentions at least one
+    podium driver by the three-letter code we gave it. This rejects
+    off-task output such as a classifier's 'User Safety: safe'."""
+    if not summary or len(summary.strip()) < MIN_SUMMARY_CHARS:
+        return False
+    codes = [r["driver"] for r in facts["podium"] if r.get("driver")]
+    return any(
+        re.search(rf"\b{re.escape(code)}\b", summary, re.IGNORECASE) for code in codes
     )
+
+
+def generate_summary(facts: dict, api_key: str | None = None) -> str:
+    """One LLM call: facts dict -> prose. Isolated behind this function so
+    tests can monkeypatch it without hitting the network."""
+    key = api_key if api_key is not None else settings.openrouter_api_key
     resp = httpx.post(
         "https://openrouter.ai/api/v1/chat/completions",
         headers={"Authorization": f"Bearer {key}"},
         json={
-            "model": "openrouter/free",
-            "messages": [{"role": "user", "content": prompt}],
+            "model": settings.openrouter_model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You write short Formula 1 race reports. You use "
+                        "ONLY the facts you are given and never add "
+                        "anything from memory."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Write a factual race summary of 3-5 sentences from "
+                        "these facts. Refer to drivers by the three-letter "
+                        "codes exactly as given (e.g. VER). If a fact is not "
+                        "in the data, do not mention it.\n\n"
+                        f"Facts (JSON): {json.dumps(facts, default=str)}"
+                    ),
+                },
+            ],
             "temperature": 0.3,
         },
         timeout=30,
     )
     resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"].strip()
+    content = resp.json()["choices"][0]["message"].get("content") or ""
+    return content.strip()
 
 
 def summarize_race(
     session_key: str, db_path: str | None = None, api_key: str | None = None
 ) -> dict:
-    """Full pipeline: DB facts -> grounded LLM prose. Same graceful-failure
-    shape as chatbot.answer_question - a bad/missing key or a network
-    failure is a structured error, never an uncaught exception."""
+    """Full pipeline: DB facts -> grounded LLM prose, validated. A bad/
+    missing key, a network failure, or unusable model output is returned
+    as a structured error, never an uncaught exception."""
     facts = get_race_facts(session_key, db_path=db_path)
-    if not facts["full_classification"]:
+
+    def fail(error: str) -> dict:
         return {
             "session_key": session_key,
             "facts": facts,
             "summary": None,
-            "error": f"No race results found for '{session_key}'.",
+            "error": error,
         }
+
+    if not facts["full_classification"]:
+        return fail(f"No race results found for '{session_key}'.")
 
     key = api_key if api_key is not None else settings.openrouter_api_key
     if not key:
-        return {
-            "session_key": session_key,
-            "facts": facts,
-            "summary": None,
-            "error": "OPENROUTER_API_KEY is not set. Add it to .env and restart.",
-        }
+        return fail("OPENROUTER_API_KEY is not set. Add it to .env and restart.")
 
-    try:
-        summary = generate_summary(facts, api_key=key)
-    except httpx.HTTPStatusError as e:
-        status = e.response.status_code
-        msg = (
-            f"OpenRouter rejected the API key ({status}). Check "
-            "OPENROUTER_API_KEY in .env."
-            if status in (401, 403)
-            else f"OpenRouter request failed ({status})."
-        )
-        return {
-            "session_key": session_key,
-            "facts": facts,
-            "summary": None,
-            "error": msg,
-        }
-    except httpx.RequestError:
-        return {
-            "session_key": session_key,
-            "facts": facts,
-            "summary": None,
-            "error": "Could not reach OpenRouter — check your internet connection.",
-        }
+    for _ in range(MAX_ATTEMPTS):
+        try:
+            candidate = generate_summary(facts, api_key=key)
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            if status in (401, 403):
+                return fail(
+                    f"OpenRouter rejected the API key ({status}). "
+                    "Check OPENROUTER_API_KEY in .env."
+                )
+            return fail(f"OpenRouter request failed ({status}).")
+        except httpx.RequestError:
+            return fail("Could not reach OpenRouter — check your connection.")
 
-    return {
-        "session_key": session_key,
-        "facts": facts,
-        "summary": summary,
-        "error": None,
-    }
+        if is_usable_summary(candidate, facts):
+            return {
+                "session_key": session_key,
+                "facts": facts,
+                "summary": candidate,
+                "error": None,
+            }
+
+    return fail(
+        f"The model returned unusable output {MAX_ATTEMPTS} times in a row. "
+        "Try again, or pin a specific model with OPENROUTER_MODEL in .env."
+    )
