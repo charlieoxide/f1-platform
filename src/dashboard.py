@@ -11,6 +11,7 @@ from src.chatbot import answer_question
 from src.config import settings
 from src.db import Lap, SessionLocal, init_db
 from src.summarizer import summarize_race
+from src.telemetry import coach_report
 
 st.set_page_config(page_title="F1 Unified Platform", layout="wide")
 st.title("F1 Unified Platform")
@@ -77,6 +78,32 @@ elif st.button("Generate summary for this session"):
         st.write(summary_result["summary"])
         with st.expander("Facts this was grounded in"):
             st.json(summary_result["facts"])
+
+st.subheader("Driver coach")
+st.caption(
+    "Compares two drivers' fastest laps using telemetry. The first run for a "
+    "session downloads it (a minute or two), then it is cached."
+)
+c1, c2, c3 = st.columns(3)
+coach_session = c1.text_input("Session", "2024 Monaco Q")
+coach_driver = c2.text_input("Driver", "NOR")
+coach_ref = c3.text_input("Reference", "VER")
+if st.button("Run coach"):
+    try:
+        with st.spinner("Loading telemetry..."):
+            coach = coach_report(coach_session, coach_driver, coach_ref)
+    except Exception as e:  # noqa: BLE001 - show a message, never a traceback
+        st.error(f"Could not run the coach: {e}")
+    else:
+        st.write(
+            f"**{coach_driver.upper()} vs {coach_ref.upper()}: "
+            f"{coach['total_delta_s']:+.3f} s** over the lap "
+            "(positive = behind the reference)"
+        )
+        for corner in coach["corners"][:5]:
+            st.write("- " + corner.message)
+        st.caption("Running time delta along the lap (rising = losing time)")
+        st.line_chart(coach["delta"].set_index("Distance")["delta_s"])
 
 st.subheader("Ask the data")
 if not settings.openrouter_api_key:

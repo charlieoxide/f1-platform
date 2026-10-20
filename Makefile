@@ -1,4 +1,4 @@
-.PHONY: install lint test ingest dashboard api clean-disk
+.PHONY: install lint test ingest train coach dashboard api clean-disk
 
 install:
 	pip install -r requirements.txt
@@ -12,6 +12,9 @@ test: lint
 
 ingest:
 	python -m src.ingest --session "$(RACE)"
+
+coach:
+	python -m src.telemetry --session "$(SESSION)" --driver $(DRIVER) --reference $(REF)
 
 train:
 	python -m src.predictor
