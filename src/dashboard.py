@@ -81,8 +81,9 @@ elif st.button("Generate summary for this session"):
 
 st.subheader("Driver coach")
 st.caption(
-    "Compares two drivers' fastest laps using telemetry. The first run for a "
-    "session downloads it (a minute or two), then it is cached."
+    "Compares two drivers' fastest laps using telemetry from OpenF1 (free API; "
+    "~4 samples/s, so braking points are good to roughly 10-20 m). Results are "
+    "cached after the first run."
 )
 c1, c2, c3 = st.columns(3)
 coach_session = c1.text_input("Session", "2024 Monaco Q")
@@ -102,6 +103,13 @@ if st.button("Run coach"):
         )
         for corner in coach["corners"][:5]:
             st.write("- " + corner.message)
+        times = coach.get("lap_times_s")
+        if times:
+            d, r = coach_driver.upper().strip(), coach_ref.upper().strip()
+            st.caption(
+                f"Official lap times: {d} {times[d]:.3f} s, {r} {times[r]:.3f} s "
+                f"(gap {times[d] - times[r]:+.3f} s)"
+            )
         st.caption("Running time delta along the lap (rising = losing time)")
         st.line_chart(coach["delta"].set_index("Distance")["delta_s"])
 

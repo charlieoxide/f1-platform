@@ -20,6 +20,7 @@ import fastf1
 import pandas as pd
 from fastf1.exceptions import DataNotLoadedError
 
+from src import openf1
 from src.coach import compare_laps
 from src.config import settings
 from src.ingest import _check_event_match, parse_session_arg
@@ -82,12 +83,21 @@ def circuit_corners(session) -> list[tuple[str, float]] | None:
         return None
 
 
-def coach_report(session_arg: str, driver: str, reference: str) -> dict:
+def coach_report(
+    session_arg: str, driver: str, reference: str, source: str = "openf1"
+) -> dict:
     """session_arg like '2024 Monaco Q'. Compares each driver's fastest
-    lap in that session; the reference is usually the pole-sitter."""
+    lap in that session; the reference is usually the pole-sitter.
+
+    source: 'openf1' (default - F1's own server now rejects FastF1 with
+    HTTP 401) or 'fastf1' (kept for when it works again)."""
     driver, reference = driver.upper().strip(), reference.upper().strip()
     if driver == reference:
         raise ValueError("Pick two different drivers to compare.")
+    if source == "openf1":
+        return openf1.coach_report_openf1(session_arg, driver, reference)
+    if source != "fastf1":
+        raise ValueError(f"Unknown telemetry source '{source}'.")
     year, event, session_type = parse_session_arg(session_arg)
     session = load_session_with_telemetry(year, event, session_type)
     return compare_laps(
@@ -122,8 +132,12 @@ def main() -> None:
     parser.add_argument("--driver", help="e.g. NOR")
     parser.add_argument("--reference", help="e.g. VER")
     parser.add_argument(
-        "--check", nargs="+", metavar="SESSION", help="probe telemetry availability"
+        "--check",
+        nargs="+",
+        metavar="SESSION",
+        help="probe FastF1 telemetry availability",
     )
+    parser.add_argument("--source", choices=["openf1", "fastf1"], default="openf1")
     args = parser.parse_args()
 
     if args.check:
@@ -135,11 +149,18 @@ def main() -> None:
     if not (args.session and args.driver and args.reference):
         parser.error("give --session, --driver and --reference (or use --check)")
 
-    result = coach_report(args.session, args.driver, args.reference)
+    result = coach_report(args.session, args.driver, args.reference, args.source)
     print(
         f"\n{args.driver} vs {args.reference}: {result['total_delta_s']:+.3f} s "
         "over the lap (+ = behind the reference)\n"
     )
+    times = result.get("lap_times_s")
+    if times:
+        d, r = args.driver.upper(), args.reference.upper()
+        print(
+            f"Official lap times: {d} {times[d]:.3f} s, {r} {times[r]:.3f} s "
+            f"(gap {times[d] - times[r]:+.3f} s)\n"
+        )
     for c in result["corners"]:
         print(" -", c.message)
 

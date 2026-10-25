@@ -41,3 +41,20 @@ eventual deployment, not run continuously alongside training/dev work.
 
 **Decision:** All changes go through a PR; GitHub Actions must pass (lint +
 pytest) before merge. No direct pushes to `main`.
+
+## 2026-10 — OpenF1 as the telemetry source for the driver coach
+
+**Context:** FastF1 loads telemetry from F1's static timing server. By Oct
+2026 that server answered with HTTP 401, so FastF1 reported "Car telemetry
+data is unavailable" for every session tried (2023, 2024, 2026), and could
+not fetch any session it had not already cached.
+
+**Decision:** The coach reads telemetry from OpenF1 (free API) instead. The
+FastF1 path stays behind `--source fastf1` for if access returns. The coach
+maths (`coach.py`) is source-agnostic, so only a loader changed.
+
+**Consequences:** OpenF1 has no distance channel (distance is the integral
+of speed), ~3.8 samples/s (braking points good to ~10-20 m), no corner map
+(zones are labelled "Braking zone N"), and does not flag deleted laps.
+Session and driver names must match clearly, otherwise the call fails and
+lists the options - the lesson of the Austria/"Great Britain" mislabel.

@@ -86,7 +86,7 @@ def test_coach_report_end_to_end_without_network(monkeypatch) -> None:
         "src.telemetry.load_session_with_telemetry",
         lambda year, event, st: _session(corners),
     )
-    result = coach_report("2024 Monaco Q", "nor", "ver")  # case-insensitive
+    result = coach_report("2024 Monaco Q", "nor", "ver", source="fastf1")
     first = result["corners"][0]
     assert first.label == "Turn 3"
     assert "later than the reference" in first.message
@@ -125,3 +125,18 @@ def test_count_drivers_with_telemetry() -> None:
     assert count_drivers_with_telemetry(S()) == 2
     assert count_drivers_with_telemetry(Empty()) == 0
     assert count_drivers_with_telemetry(NotLoaded()) == 0
+
+
+def test_coach_report_defaults_to_openf1(monkeypatch) -> None:
+    seen = {}
+    monkeypatch.setattr(
+        "src.openf1.coach_report_openf1",
+        lambda s, d, r: seen.update(args=(s, d, r)) or {"corners": []},
+    )
+    coach_report("2024 Monaco Q", "nor", "ver")
+    assert seen["args"] == ("2024 Monaco Q", "NOR", "VER")
+
+
+def test_coach_report_rejects_unknown_source() -> None:
+    with pytest.raises(ValueError, match="Unknown telemetry source"):
+        coach_report("2024 Monaco Q", "NOR", "VER", source="nope")
