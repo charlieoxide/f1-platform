@@ -16,6 +16,7 @@ from src.openf1 import (
     fastest_lap,
     resolve_driver,
     resolve_session,
+    sector_check,
 )
 from tests.test_coach import REF, make_lap
 
@@ -269,6 +270,7 @@ def test_build_lap_frame_integrates_distance_and_scales_brake() -> None:
     assert frame["Distance"].iloc[-1] == pytest.approx(3000, abs=1)
     assert frame["Brake"].max() == pytest.approx(1.0)  # 100 -> 1.0
     assert frame["Distance"].is_monotonic_increasing
+    assert frame["Time"].iloc[0] == 0 and frame["Time"].iloc[-1] == 60.0
 
 
 def _simulate_samples(lap_df, step=0.264):
@@ -316,13 +318,51 @@ def test_coach_report_openf1_wires_everything_together(monkeypatch) -> None:
     )
     as_float = lambda df: df.assign(Brake=df["Brake"].astype(float))  # noqa: E731
     laps = {
-        4: (as_float(make_lap([(615, 700, 100, 730)])), 71.4),
-        1: (as_float(make_lap(REF)), 71.6),
+        4: (as_float(make_lap([(615, 700, 100, 730)])), {"lap_duration": 71.4}),
+        1: (as_float(make_lap(REF)), {"lap_duration": 71.6}),
     }
     monkeypatch.setattr("src.openf1.lap_telemetry", lambda key, num: laps[num])
 
     result = coach_report_openf1("2024 Monaco Q", "nor", "ver")
     assert result["lap_times_s"] == {"NOR": 71.4, "VER": 71.6}
     assert result["corners"]
+    assert result["sector_check"] == []  # no sector splits supplied -> no check
     with pytest.raises(ValueError, match="two different drivers"):
         coach_report_openf1("2024 Monaco Q", "NOR", "nor")
+
+
+def _with_time(lap):
+    v = np.maximum(lap["Speed"].to_numpy() / 3.6, 1.0)
+    d = lap["Distance"].to_numpy()
+    t = np.concatenate([[0.0], np.cumsum(np.diff(d) / ((v[:-1] + v[1:]) / 2))])
+    return lap.assign(Time=t, Brake=lap["Brake"].astype(float))
+
+
+def test_sector_check_agrees_with_official_splits_for_a_uniform_slowdown() -> None:
+    """Driver is uniformly 1% slower, so the true gap at each sector line is
+    1% of the reference's cumulative time. The coach must reproduce that."""
+    from src.coach import compare_laps
+
+    ref = _with_time(make_lap([(600, 700, 100, 730), (1400, 1500, 100, 1530)]))
+    total = float(ref["Time"].iloc[-1])
+    drv = ref.assign(Time=ref["Time"] * 1.01)
+    result = compare_laps(drv, ref)
+
+    ref_lap = {f"duration_sector_{i}": total / 3 for i in (1, 2, 3)}
+    drv_lap = {k: v * 1.01 for k, v in ref_lap.items()}
+    checks = sector_check(result, ref_lap, drv_lap)
+
+    assert [c["line"] for c in checks] == ["S1/S2", "S2/S3"]
+    for c in checks:
+        assert c["coach_s"] == pytest.approx(c["official_s"], abs=0.02)
+    assert result["total_delta_s"] == pytest.approx(0.01 * total, abs=0.005)
+
+
+def test_sector_check_is_skipped_when_clocks_do_not_match_or_data_missing() -> None:
+    from src.coach import compare_laps
+
+    ref = _with_time(make_lap(REF))
+    result = compare_laps(ref, ref)
+    assert sector_check(result, {}, {}) == []  # splits missing
+    wrong = {f"duration_sector_{i}": 40.0 for i in (1, 2, 3)}  # 120 s vs ~26 s lap
+    assert sector_check(result, wrong, wrong) == []

@@ -92,7 +92,7 @@ def test_no_braking_where_reference_brakes_is_flagged() -> None:
     drv = make_lap(REF, braking=False)
     c = compare_laps(drv, make_lap(REF))["corners"][0]
     assert c.driver_brake_m is None
-    assert "no braking detected" in c.message
+    assert "no braking onset" in c.message
 
 
 def test_corner_labels_use_turn_numbers_only_when_close() -> None:
@@ -128,3 +128,86 @@ def test_normalize_telemetry_converts_bool_brake_and_sorts() -> None:
     clean = normalize_telemetry(shuffled)
     assert clean["Brake"].dtype == float
     assert clean["Distance"].is_monotonic_increasing
+
+
+def _with_time(lap):
+    v = np.maximum(lap["Speed"].to_numpy() / 3.6, 1.0)
+    d = lap["Distance"].to_numpy()
+    t = np.concatenate([[0.0], np.cumsum(np.diff(d) / ((v[:-1] + v[1:]) / 2))])
+    return lap.assign(Time=t)
+
+
+def test_measured_clock_is_used_for_the_total_gap() -> None:
+    """The real bug: the total came from integrating speed and disagreed
+    with the official lap times. With a Time column, the total must be the
+    measured difference."""
+    ref = _with_time(make_lap(REF))
+    total = float(ref["Time"].iloc[-1])
+    drv = ref.assign(Time=ref["Time"] * 1.02)
+    result = compare_laps(drv, ref)
+    assert result["total_delta_s"] == pytest.approx(0.02 * total, abs=1e-6)
+    assert result["delta"]["delta_s"].iloc[-1] == pytest.approx(0.02 * total, abs=0.05)
+
+
+def test_timedelta_clock_is_accepted() -> None:
+    ref = _with_time(make_lap(REF))
+    drv = ref.assign(Time=pd.to_timedelta(ref["Time"], unit="s"))
+    assert abs(compare_laps(drv, ref)["total_delta_s"]) < 1e-6
+
+
+def test_unusable_clock_falls_back_to_integrating_speed() -> None:
+    ref = _with_time(make_lap(REF))
+    broken = ref.assign(Time=ref["Time"].iloc[::-1].to_numpy())  # runs backwards
+    assert "Time" not in normalize_telemetry(broken).columns
+    assert abs(compare_laps(broken, ref)["total_delta_s"]) < 0.5
+
+
+def test_continuous_braking_is_not_reported_as_150_m_early() -> None:
+    """The real bug: the reference brakes in two zones 40 m apart; the
+    driver brakes continuously through both. The old search window made
+    the second zone read 'braking 150 m earlier'. It must now say the
+    driver was already braking, with no distance claim."""
+    ref = make_lap([(600, 700, 100, 730)])
+    drv = ref.copy()
+    ref["Brake"] = ((ref["Distance"] >= 600) & (ref["Distance"] < 650)) | (
+        (ref["Distance"] >= 690) & (ref["Distance"] < 740)
+    )
+    drv["Brake"] = (drv["Distance"] >= 600) & (drv["Distance"] < 740)
+
+    corners = sorted(compare_laps(drv, ref)["corners"], key=lambda c: c.ref_brake_m)
+    assert len(corners) == 2
+    second = corners[1]
+    assert second.brake_status == "continuous"
+    assert second.brake_delta_m is None
+    assert "already braking" in second.message
+    assert not any("150 m" in c.message for c in corners)
+
+
+def test_braking_far_outside_tolerance_is_flagged_not_measured() -> None:
+    drv = make_lap([(700, 780, 100, 800)])  # 100 m later: outside the 75 m match
+    c = compare_laps(drv, make_lap(REF))["corners"][0]
+    assert c.brake_status == "none" and c.brake_delta_m is None
+    assert "no braking onset" in c.message
+
+
+def test_differences_below_sample_spacing_are_not_reported() -> None:
+    """With ~20 m between samples, a 10 m braking difference is noise: it
+    must not appear in the message, while a 30 m one must."""
+    from src.coach import _describe
+
+    kwargs = dict(
+        label="Zone",
+        brake_status="matched",
+        apex_delta=0.0,
+        throttle_delta=None,
+        time_delta=0.05,
+        brake_min_m=20.0,
+        throttle_min_m=20.0,
+    )
+    assert "braking" not in _describe(brake_delta=10.0, **kwargs)
+    assert "braking 30 m later" in _describe(brake_delta=30.0, **kwargs)
+
+
+def test_resolution_is_taken_from_the_telemetry_spacing() -> None:
+    result = compare_laps(make_lap(REF, step=20.0), make_lap(REF, step=20.0))
+    assert result["resolution_m"] == pytest.approx(20.0, abs=0.5)

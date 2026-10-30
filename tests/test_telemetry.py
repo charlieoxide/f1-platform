@@ -7,7 +7,9 @@ from src.telemetry import (
     circuit_corners,
     coach_report,
     count_drivers_with_telemetry,
+    describe_sector_check,
     fastest_lap_telemetry,
+    trace_table,
 )
 from tests.test_coach import REF, make_lap
 
@@ -140,3 +142,25 @@ def test_coach_report_defaults_to_openf1(monkeypatch) -> None:
 def test_coach_report_rejects_unknown_source() -> None:
     with pytest.raises(ValueError, match="Unknown telemetry source"):
         coach_report("2024 Monaco Q", "NOR", "VER", source="nope")
+
+
+def test_describe_sector_check_reports_worst_error() -> None:
+    checks = [
+        {"line": "S1/S2", "official_s": -0.010, "coach_s": -0.030},
+        {"line": "S2/S3", "official_s": -0.020, "coach_s": 0.080},
+    ]
+    text, worst = describe_sector_check(checks)
+    assert "S1/S2: coach -0.030 s vs official -0.010 s" in text
+    assert worst == pytest.approx(0.100)
+
+
+def test_trace_table_shows_only_the_window_around_the_spot() -> None:
+    aligned = pd.DataFrame(
+        {"Distance": [float(x) for x in range(0, 3000, 5)], "delta_s": 0.0}
+    )
+    table = trace_table(aligned, at_m=1230, half_window_m=40, every_m=10)
+    lines = table.splitlines()
+    assert lines[0].split() == ["Distance", "delta_s"]
+    distances = [float(row.split()[0]) for row in lines[1:]]
+    assert min(distances) >= 1190 and max(distances) <= 1270
+    assert 1230.0 in distances

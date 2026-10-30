@@ -17,6 +17,7 @@ import logging
 from pathlib import Path
 
 import fastf1
+import numpy as np
 import pandas as pd
 from fastf1.exceptions import DataNotLoadedError
 
@@ -126,6 +127,28 @@ def check_sessions(session_args: list[str]) -> list[tuple[str, str]]:
     return rows
 
 
+def describe_sector_check(checks: list[dict]) -> tuple[str, float]:
+    """One-line summary of the sector-split check, and the worst error."""
+    text = "; ".join(
+        f"{c['line']}: coach {c['coach_s']:+.3f} s vs official {c['official_s']:+.3f} s"
+        for c in checks
+    )
+    worst = max(abs(c["coach_s"] - c["official_s"]) for c in checks)
+    return text, worst
+
+
+def trace_table(
+    aligned: pd.DataFrame, at_m: float, half_window_m: float = 80, every_m: float = 10
+) -> str:
+    """Raw aligned numbers around one spot on the lap - for diagnosing
+    where the two laps disagree."""
+    near = aligned[(aligned["Distance"] - at_m).abs() <= half_window_m]
+    spacing = float(np.median(np.diff(aligned["Distance"])))
+    return (
+        near.iloc[:: max(1, round(every_m / spacing))].round(3).to_string(index=False)
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--session", help="e.g. '2024 Monaco Q'")
@@ -138,6 +161,13 @@ def main() -> None:
         help="probe FastF1 telemetry availability",
     )
     parser.add_argument("--source", choices=["openf1", "fastf1"], default="openf1")
+    parser.add_argument(
+        "--trace-at",
+        nargs="+",
+        type=float,
+        metavar="METRES",
+        help="print the raw aligned numbers around these distances",
+    )
     args = parser.parse_args()
 
     if args.check:
@@ -161,8 +191,23 @@ def main() -> None:
             f"Official lap times: {d} {times[d]:.3f} s, {r} {times[r]:.3f} s "
             f"(gap {times[d] - times[r]:+.3f} s)\n"
         )
+    checks = result.get("sector_check")
+    if checks:
+        text, worst = describe_sector_check(checks)
+        print(f"Check against official sector splits - {text}")
+        if worst > 0.05:
+            print(
+                f"  WARNING: off by up to {worst:.2f} s - "
+                "treat per-corner times as rough.\n"
+            )
+        else:
+            print()
+    print(f"(telemetry resolution ~{result['resolution_m']:.0f} m between samples)\n")
     for c in result["corners"]:
         print(" -", c.message)
+    for at in args.trace_at or []:
+        print(f"\nAligned traces around {at:.0f} m:")
+        print(trace_table(result["aligned"], at))
 
 
 if __name__ == "__main__":

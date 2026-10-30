@@ -11,7 +11,7 @@ from src.chatbot import answer_question
 from src.config import settings
 from src.db import Lap, SessionLocal, init_db
 from src.summarizer import summarize_race
-from src.telemetry import coach_report
+from src.telemetry import coach_report, describe_sector_check
 
 st.set_page_config(page_title="F1 Unified Platform", layout="wide")
 st.title("F1 Unified Platform")
@@ -110,6 +110,15 @@ if st.button("Run coach"):
                 f"Official lap times: {d} {times[d]:.3f} s, {r} {times[r]:.3f} s "
                 f"(gap {times[d] - times[r]:+.3f} s)"
             )
+        checks = coach.get("sector_check")
+        if checks:
+            text, worst = describe_sector_check(checks)
+            st.caption(f"Check against official sector splits - {text}")
+            if worst > 0.05:
+                st.warning(
+                    f"The coach's timing is off by up to {worst:.2f} s against "
+                    "the official sector splits, so treat per-corner times as rough."
+                )
         st.caption("Running time delta along the lap (rising = losing time)")
         st.line_chart(coach["delta"].set_index("Distance")["delta_s"])
 

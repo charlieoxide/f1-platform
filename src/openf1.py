@@ -246,6 +246,7 @@ def build_lap_frame(
     )
     return pd.DataFrame(
         {
+            "Time": grid,  # measured seconds since the lap started
             "Distance": dist,
             "Speed": v,
             "Throttle": np.interp(grid, t, throttle),
@@ -254,7 +255,7 @@ def build_lap_frame(
     )
 
 
-def lap_telemetry(session_key: int, driver_number: int) -> tuple[pd.DataFrame, float]:
+def lap_telemetry(session_key: int, driver_number: int) -> tuple[pd.DataFrame, dict]:
     lap = fastest_lap(session_key, driver_number)
     start = datetime.fromisoformat(lap["date_start"])
     duration = float(lap["lap_duration"])
@@ -271,24 +272,64 @@ def lap_telemetry(session_key: int, driver_number: int) -> tuple[pd.DataFrame, f
             f"OpenF1 returned only {len(samples)} telemetry samples for "
             f"driver {driver_number}'s fastest lap."
         )
-    return build_lap_frame(samples, start, duration), duration
+    return build_lap_frame(samples, start, duration), lap
+
+
+SECTOR_KEYS = ("duration_sector_1", "duration_sector_2", "duration_sector_3")
+
+
+def sector_check(result: dict, ref_lap: dict, drv_lap: dict) -> list[dict]:
+    """Independent accuracy check against the OFFICIAL sector splits.
+
+    The sector lines are fixed points on the track, so at the reference
+    lap's S1/S2 line the coach's running delta should equal the official
+    gap between the two drivers' cumulative sector times. The difference
+    is how far off the coach's mid-lap alignment is. Returns [] when the
+    splits are missing or don't add up to the telemetry clock - better no
+    check than a misleading one."""
+    try:
+        ref_s = [float(ref_lap[k]) for k in SECTOR_KEYS]
+        drv_s = [float(drv_lap[k]) for k in SECTOR_KEYS]
+    except (KeyError, TypeError, ValueError):
+        return []
+
+    delta = result["delta"]
+    ref_t = delta["ref_time_s"].to_numpy()
+    if abs(ref_t[-1] - sum(ref_s)) > 1.0:
+        return []
+
+    checks = []
+    for i, line in enumerate(("S1/S2", "S2/S3")):
+        ref_cum, drv_cum = sum(ref_s[: i + 1]), sum(drv_s[: i + 1])
+        x = float(np.interp(ref_cum, ref_t, delta["Distance"]))
+        checks.append(
+            {
+                "line": line,
+                "official_s": drv_cum - ref_cum,
+                "coach_s": float(np.interp(x, delta["Distance"], delta["delta_s"])),
+            }
+        )
+    return checks
 
 
 def coach_report_openf1(session_arg: str, driver: str, reference: str) -> dict:
     """session_arg like '2024 Monaco Q'. Same result shape as the FastF1
-    path, plus the official lap times for a sanity check against the
-    coach's integrated delta."""
+    path, plus the official lap times and a sector-split accuracy check."""
     driver, reference = driver.upper().strip(), reference.upper().strip()
     if driver == reference:
         raise ValueError("Pick two different drivers to compare.")
     year, event, session_type = parse_session_arg(session_arg)
     session_key = resolve_session(year, event, session_type)["session_key"]
 
-    drv_tel, drv_time = lap_telemetry(session_key, resolve_driver(session_key, driver))
-    ref_tel, ref_time = lap_telemetry(
+    drv_tel, drv_lap = lap_telemetry(session_key, resolve_driver(session_key, driver))
+    ref_tel, ref_lap = lap_telemetry(
         session_key, resolve_driver(session_key, reference)
     )
 
     result = compare_laps(drv_tel, ref_tel, corners=None)
-    result["lap_times_s"] = {driver: drv_time, reference: ref_time}
+    result["lap_times_s"] = {
+        driver: float(drv_lap["lap_duration"]),
+        reference: float(ref_lap["lap_duration"]),
+    }
+    result["sector_check"] = sector_check(result, ref_lap, drv_lap)
     return result

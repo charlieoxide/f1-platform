@@ -58,3 +58,27 @@ of speed), ~3.8 samples/s (braking points good to ~10-20 m), no corner map
 (zones are labelled "Braking zone N"), and does not flag deleted laps.
 Session and driver names must match clearly, otherwise the call fails and
 lists the options - the lesson of the Austria/"Great Britain" mislabel.
+
+## 2026-10 — How the driver coach is validated (and what it won't claim)
+
+**Context:** The first run on real Monaco 2024 qualifying telemetry failed
+its own sanity checks: the lap gap had the wrong sign versus the official
+lap times, "braking 150 m earlier" appeared repeatedly (an artefact of a
+search-window edge), and the running delta swung by up to 0.6 s at slow
+corners and recovered within ~150 m, which no driver can do.
+
+**Decisions:**
+- Time comes from the measured timestamps, not from integrating speed.
+- Braking zones are matched within 75 m; otherwise the output says
+  "already braking" / "no braking onset" instead of a number.
+- Differences below the telemetry's sample spacing (~12 m median) are not
+  reported.
+- Accuracy is checked against the official sector splits (fixed points on
+  the track), and the UI warns when the coach disagrees by more than 0.05 s.
+
+**Rejected:** aligning laps at their slowest points. Speed barely changes
+near a corner's minimum, so that position is poorly defined and forcing it
+to match would add error exactly where timing is most sensitive.
+
+**Open:** the cause of the phantom swings is not yet established; the
+`--trace-at` diagnostic exists to find it.
