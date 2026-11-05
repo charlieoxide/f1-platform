@@ -23,3 +23,7 @@ models/*.pt
 # Stray output-redirect files (e.g. `make train >> output.txt`)
 *Output.txt
 *output.txt
+
+.env.swp
+.venv/
+*.db
