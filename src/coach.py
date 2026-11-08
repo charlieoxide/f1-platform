@@ -178,6 +178,23 @@ def _describe(
     return f"{label}: {', '.join(parts)} - {verb} {abs(time_delta):.2f} s."
 
 
+def speed_mismatch_rms(
+    driver_tel: pd.DataFrame, ref_tel: pd.DataFrame, step_m: float = 5.0
+) -> float:
+    """RMS speed difference (km/h) between two laps on a shared distance
+    grid. Used to find the clock offset between two telemetry streams: the
+    right offset is the one that makes the traces line up best."""
+    drv = normalize_telemetry(driver_tel)
+    ref = normalize_telemetry(ref_tel)
+    ref_len = ref["Distance"].iloc[-1] - ref["Distance"].iloc[0]
+    drv_len = drv["Distance"].iloc[-1] - drv["Distance"].iloc[0]
+    grid = np.arange(0, ref_len, step_m)
+    d_dist = (drv["Distance"] - drv["Distance"].iloc[0]) * ref_len / drv_len
+    r_dist = ref["Distance"] - ref["Distance"].iloc[0]
+    diff = np.interp(grid, d_dist, drv["Speed"]) - np.interp(grid, r_dist, ref["Speed"])
+    return float(np.sqrt(np.mean(diff**2)))
+
+
 def compare_laps(
     driver_tel: pd.DataFrame,
     ref_tel: pd.DataFrame,

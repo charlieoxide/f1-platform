@@ -16,11 +16,11 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from pathlib import Path
 
 import httpx
 
 from src.config import settings
+from src.dbutil import readonly_uri
 
 MAX_PLAUSIBLE_LAP_SECONDS = 200  # same red-flag-timing guard as analysis.py
 MAX_ATTEMPTS = 3
@@ -30,8 +30,7 @@ MIN_SUMMARY_CHARS = 60
 def get_race_facts(session_key: str, db_path: str | None = None) -> dict:
     """Pull the structured facts a race summary is grounded in. Read-only
     connection, same pattern as the chatbot module."""
-    resolved = Path(db_path or settings.db_path).resolve()
-    conn = sqlite3.connect(f"file:{resolved}?mode=ro", uri=True)
+    conn = sqlite3.connect(readonly_uri(db_path or settings.db_path), uri=True)
     try:
         conn.row_factory = sqlite3.Row
 

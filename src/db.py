@@ -17,6 +17,7 @@ from sqlalchemy import (
     inspect,
     text,
 )
+from sqlalchemy.engine import URL
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from src.config import settings
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 Path(settings.db_path).parent.mkdir(parents=True, exist_ok=True)
 
-engine = create_engine(f"sqlite:///{settings.db_path}")
+engine = create_engine(URL.create("sqlite", database=settings.db_path))
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base = declarative_base()
 

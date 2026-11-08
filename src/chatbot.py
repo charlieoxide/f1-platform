@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from pathlib import Path
 
 import httpx
 
 from src.config import settings
+from src.dbutil import readonly_uri
 
 SCHEMA_DESCRIPTION = """
 Table: laps
@@ -68,8 +68,7 @@ def run_query_safe(sql: str, db_path: str | None = None) -> list[dict]:
         raise UnsafeQueryError(f"Rejected non-SELECT or unsafe query: {sql!r}")
 
     sql = _enforce_row_limit(sql)
-    resolved = Path(db_path or settings.db_path).resolve()
-    uri = f"file:{resolved}?mode=ro"
+    uri = readonly_uri(db_path or settings.db_path)
 
     conn = sqlite3.connect(uri, uri=True)
     try:

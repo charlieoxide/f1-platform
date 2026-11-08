@@ -1,29 +1,35 @@
-.PHONY: install lint test ingest train coach dashboard api clean-disk
+# Optional shortcuts for Linux/macOS. Everything delegates to tasks.py, which
+# is the single source of truth and also works on Windows (no make needed):
+#   python tasks.py test
+.PHONY: install lint test ingest train coach dashboard api backup clean-disk
 
 install:
-	pip install -r requirements.txt
+	python tasks.py install
 
 lint:
-	ruff check src tests
-	black --check src tests
+	python tasks.py lint
 
-test: lint
-	pytest -q
+test:
+	python tasks.py test
 
 ingest:
-	python -m src.ingest --session "$(RACE)"
-
-coach:
-	python -m src.telemetry --session "$(SESSION)" --driver $(DRIVER) --reference $(REF)
+	python tasks.py ingest --session "$(RACE)"
 
 train:
-	python -m src.predictor
+	python tasks.py train
+
+coach:
+	python tasks.py coach --session "$(SESSION)" --driver $(DRIVER) --reference $(REF)
 
 dashboard:
-	PYTHONPATH=. python -m streamlit run src/dashboard.py
+	python tasks.py dashboard
 
 api:
-	uvicorn src.api:app --reload
+	python tasks.py api
 
+backup:
+	python tasks.py backup
+
+# Linux only (apt/snap)
 clean-disk:
 	bash scripts/cleanup_disk.sh

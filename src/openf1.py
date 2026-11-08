@@ -33,7 +33,7 @@ from urllib.parse import quote
 import numpy as np
 import pandas as pd
 
-from src.coach import compare_laps
+from src.coach import TelemetryError, compare_laps, speed_mismatch_rms
 from src.config import settings
 from src.ingest import parse_session_arg
 
@@ -93,7 +93,7 @@ def _cache_read(url: str):
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None  # corrupt cache entry: ignore it and refetch
 
@@ -102,7 +102,7 @@ def _cache_write(url: str, data) -> None:
     path = _cache_path(url)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data))
+    tmp.write_text(json.dumps(data), encoding="utf-8")
     os.replace(tmp, path)  # atomic: never leaves a half-written file
 
 
@@ -255,7 +255,10 @@ def build_lap_frame(
     )
 
 
-def lap_telemetry(session_key: int, driver_number: int) -> tuple[pd.DataFrame, dict]:
+def fetch_lap_samples(session_key: int, driver_number: int) -> tuple[list[dict], dict]:
+    """Raw car_data samples around the driver's fastest lap (padded by
+    PAD_S either side so the lap can be re-cut at a shifted start), plus the
+    lap record (start, duration, sector splits)."""
     lap = fastest_lap(session_key, driver_number)
     start = datetime.fromisoformat(lap["date_start"])
     duration = float(lap["lap_duration"])
@@ -272,7 +275,72 @@ def lap_telemetry(session_key: int, driver_number: int) -> tuple[pd.DataFrame, d
             f"OpenF1 returned only {len(samples)} telemetry samples for "
             f"driver {driver_number}'s fastest lap."
         )
-    return build_lap_frame(samples, start, duration), lap
+    return samples, lap
+
+
+def lap_frame(samples: list[dict], lap: dict, lag_s: float = 0.0) -> pd.DataFrame:
+    """Cut the lap out of the samples. lag_s shifts the window start: if a
+    car's telemetry stamps run late by lag_s relative to the timing system,
+    the true lap sits lag_s later in the stamps."""
+    start = datetime.fromisoformat(lap["date_start"]) + timedelta(seconds=lag_s)
+    return build_lap_frame(samples, start, float(lap["lap_duration"]))
+
+
+def estimate_clock_offset(
+    samples: list[dict],
+    lap: dict,
+    ref_frame: pd.DataFrame,
+    max_lag_s: float = 0.4,
+    step_s: float = 0.02,
+    min_gain: float = 0.03,
+) -> dict:
+    """OpenF1 stamps telemetry and lap timing from different systems, so one
+    car's telemetry can run ~0.1 s early/late relative to the other's. That
+    shifts every event along the lap (by speed x lag, and the integrated
+    distance origin with it) and shows up as phantom time swings at slow
+    corners. Only the RELATIVE offset can be found, which is all a
+    two-lap comparison needs: try shifts, keep the one where the speed
+    traces line up best.
+
+    Applied only if the best shift is strictly inside the search range and
+    improves the fit by at least min_gain; otherwise the clocks are left
+    alone and that is reported."""
+    lags = np.round(np.arange(-max_lag_s, max_lag_s + step_s / 2, step_s), 4)
+    scores = np.full(len(lags), np.inf)
+    for i, lag in enumerate(lags):
+        try:
+            scores[i] = speed_mismatch_rms(
+                lap_frame(samples, lap, float(lag)), ref_frame
+            )
+        except TelemetryError:
+            pass
+    if not np.isfinite(scores).any():
+        return {
+            "lag_s": 0.0,
+            "applied": False,
+            "rms_zero": None,
+            "rms_best": None,
+            "gain": 0.0,
+            "at_edge": False,
+        }
+
+    best, zero = int(np.argmin(scores)), int(np.argmin(np.abs(lags)))
+    lag = float(lags[best])
+    at_edge = best in (0, len(lags) - 1)
+    if not at_edge and np.isfinite(scores[best - 1 : best + 2]).all():
+        y0, y1, y2 = scores[best - 1 : best + 2]
+        denom = y0 - 2 * y1 + y2
+        if denom > 0:  # parabola through the three points around the minimum
+            lag += step_s * (y0 - y2) / (2 * denom)
+    gain = float(1 - scores[best] / scores[zero])
+    return {
+        "lag_s": lag,
+        "applied": (not at_edge) and gain >= min_gain,
+        "rms_zero": float(scores[zero]),
+        "rms_best": float(scores[best]),
+        "gain": gain,
+        "at_edge": at_edge,
+    }
 
 
 SECTOR_KEYS = ("duration_sector_1", "duration_sector_2", "duration_sector_3")
@@ -312,24 +380,103 @@ def sector_check(result: dict, ref_lap: dict, drv_lap: dict) -> list[dict]:
     return checks
 
 
+PROBE_ENDPOINTS = (
+    ("session_result", 3),  # how many rows to show for each
+    ("starting_grid", 3),
+    ("stints", 2),
+    ("pit", 2),
+    ("laps", 1),
+    ("drivers", 1),
+    ("race_control", 3),
+)
+
+
+def probe_session(session_arg: str) -> list[dict]:
+    """What does OpenF1 return for this session? Used to check the shape of
+    each endpoint against real data before ingestion code is written for it."""
+    year, event, session_type = parse_session_arg(session_arg)
+    session = resolve_session(year, event, session_type)
+    key = session["session_key"]
+    report = [{"endpoint": "sessions", "rows": 1, "sample": [session], "error": None}]
+    for endpoint, show in PROBE_ENDPOINTS:
+        try:
+            rows = _get(endpoint, {"session_key": key})
+            report.append(
+                {
+                    "endpoint": endpoint,
+                    "rows": len(rows),
+                    "sample": rows[:show],
+                    "error": None,
+                }
+            )
+        except OpenF1Error as e:
+            report.append(
+                {"endpoint": endpoint, "rows": 0, "sample": [], "error": str(e)}
+            )
+    return report
+
+
+def format_probe(report: list[dict]) -> str:
+    lines = []
+    for item in report:
+        head = f"== {item['endpoint']}: {item['rows']} rows"
+        if item["error"]:
+            lines.append(f"{head} - ERROR: {item['error']}")
+            continue
+        lines.append(head)
+        if item["sample"]:
+            lines.append("   fields: " + ", ".join(item["sample"][0].keys()))
+        for row in item["sample"]:
+            lines.append("   " + json.dumps(row)[:400])
+    return "\n".join(lines)
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="OpenF1 helper.")
+    parser.add_argument(
+        "--probe",
+        metavar="SESSION",
+        required=True,
+        help="show the shape of OpenF1's data, e.g. '2024 Monaco R'",
+    )
+    args = parser.parse_args()
+    print(format_probe(probe_session(args.probe)))
+
+
 def coach_report_openf1(session_arg: str, driver: str, reference: str) -> dict:
     """session_arg like '2024 Monaco Q'. Same result shape as the FastF1
-    path, plus the official lap times and a sector-split accuracy check."""
+    path, plus the official lap times, the telemetry clock offset that was
+    found, and a sector-split accuracy check."""
     driver, reference = driver.upper().strip(), reference.upper().strip()
     if driver == reference:
         raise ValueError("Pick two different drivers to compare.")
     year, event, session_type = parse_session_arg(session_arg)
     session_key = resolve_session(year, event, session_type)["session_key"]
 
-    drv_tel, drv_lap = lap_telemetry(session_key, resolve_driver(session_key, driver))
-    ref_tel, ref_lap = lap_telemetry(
+    drv_samples, drv_lap = fetch_lap_samples(
+        session_key, resolve_driver(session_key, driver)
+    )
+    ref_samples, ref_lap = fetch_lap_samples(
         session_key, resolve_driver(session_key, reference)
     )
 
-    result = compare_laps(drv_tel, ref_tel, corners=None)
+    ref_frame = lap_frame(ref_samples, ref_lap)
+    offset = estimate_clock_offset(drv_samples, drv_lap, ref_frame)
+    drv_frame = lap_frame(
+        drv_samples, drv_lap, offset["lag_s"] if offset["applied"] else 0.0
+    )
+
+    result = compare_laps(drv_frame, ref_frame, corners=None)
     result["lap_times_s"] = {
         driver: float(drv_lap["lap_duration"]),
         reference: float(ref_lap["lap_duration"]),
     }
+    result["clock_offset"] = offset
     result["sector_check"] = sector_check(result, ref_lap, drv_lap)
     return result
+
+
+if __name__ == "__main__":
+    main()

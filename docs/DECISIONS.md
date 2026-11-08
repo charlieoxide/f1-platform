@@ -82,3 +82,28 @@ to match would add error exactly where timing is most sensitive.
 
 **Open:** the cause of the phantom swings is not yet established; the
 `--trace-at` diagnostic exists to find it.
+
+## 2026-10 — Telemetry clock offset between drivers (OpenF1)
+
+**Finding:** On real 2024 Monaco qualifying data (NOR vs VER) the sector-split
+check failed by ~0.1 s at both sector lines, and the running delta showed
+0.5-0.65 s swings at slow corners that recovered within ~150 m. The aligned
+traces showed every event in one lap (brake on, brake off, minimum speed)
+shifted by a similar 10-20 m. A simulation reproduces this exactly: delaying
+one car's telemetry clock by 0.13 s drops the coach's delta by ~0.22 s at
+both sector lines. Cause (hypothesis, consistent with the evidence): OpenF1
+stamps telemetry and lap timing from different systems, so one car's data
+can run ~0.1 s early/late relative to the other's.
+
+**Decision:** Estimate the relative offset per pair of laps by trying shifts
+of +/-0.4 s and keeping the one where the speed traces line up best; apply
+it only if it is strictly inside the search range and improves the fit by
+>= 3%. On simulated laps this recovers planted offsets (+0.13, +0.26,
+-0.15 s) to within ~0.03 s and brings the sector-check error from 0.22-0.39 s
+to ~0.04 s.
+
+**Limits:** Only the *relative* offset can be found, which is all a
+two-lap comparison needs. The fit also absorbs a little of any consistent
+real braking difference (~0.02 s bias in simulation). The sector-split check
+remains the independent test of whether the result can be trusted, and the
+UI warns when it disagrees by more than 0.05 s.

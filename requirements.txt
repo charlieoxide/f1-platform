@@ -1,6 +1,7 @@
-# Core
+# Core. Tested on Python 3.11-3.14 (3.12 recommended). pandas is held below 3
+# because FastF1 requires it; pandas 2 has no builds for Python 3.15 yet.
 fastf1>=3.4
-pandas>=2.2
+pandas>=2.2,<3
 numpy>=1.26
 scikit-learn>=1.5
 sqlalchemy>=2.0
@@ -12,12 +13,8 @@ fastapi>=0.111
 uvicorn[standard]>=0.30
 streamlit>=1.36
 
-# LLM-backed modules (chatbot, summariser) — call OpenRouter via HTTP,
-# no heavy local ML framework required
+# LLM-backed modules (chatbot, summariser) call OpenRouter over HTTP
 httpx>=0.27
-
-# Inference only for the LSTM autoencoder trained on Colab (avoid full torch/tf)
-onnxruntime>=1.18
 
 # Dev / quality
 pytest>=8.2

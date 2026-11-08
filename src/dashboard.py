@@ -2,16 +2,27 @@
 comparison and tyre-degradation views. Data shaping lives in analysis.py
 (tested separately); this file only wires that logic to the UI."""
 
+import sys
+from pathlib import Path
+
+# Let `streamlit run src/dashboard.py` find the `src` package from any working
+# directory on any OS, without needing PYTHONPATH.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import pandas as pd
 import streamlit as st
 from sqlalchemy import select
 
-from src.analysis import pace_comparison, tyre_stints
-from src.chatbot import answer_question
-from src.config import settings
-from src.db import Lap, SessionLocal, init_db
-from src.summarizer import summarize_race
-from src.telemetry import coach_report, describe_sector_check
+from src.analysis import pace_comparison, tyre_stints  # noqa: E402
+from src.chatbot import answer_question  # noqa: E402
+from src.config import settings  # noqa: E402
+from src.db import Lap, SessionLocal, init_db  # noqa: E402
+from src.summarizer import summarize_race  # noqa: E402
+from src.telemetry import (  # noqa: E402
+    coach_report,
+    describe_clock_offset,
+    describe_sector_check,
+)
 
 st.set_page_config(page_title="F1 Unified Platform", layout="wide")
 st.title("F1 Unified Platform")
@@ -110,6 +121,9 @@ if st.button("Run coach"):
                 f"Official lap times: {d} {times[d]:.3f} s, {r} {times[r]:.3f} s "
                 f"(gap {times[d] - times[r]:+.3f} s)"
             )
+        offset_line = describe_clock_offset(coach.get("clock_offset"))
+        if offset_line:
+            st.caption(offset_line)
         checks = coach.get("sector_check")
         if checks:
             text, worst = describe_sector_check(checks)

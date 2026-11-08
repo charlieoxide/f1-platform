@@ -127,6 +127,23 @@ def check_sessions(session_args: list[str]) -> list[tuple[str, str]]:
     return rows
 
 
+def describe_clock_offset(offset: dict | None) -> str:
+    if not offset or offset.get("rms_zero") is None:
+        return ""
+    if offset["applied"]:
+        return (
+            f"Telemetry clock offset between the two laps: {offset['lag_s']:+.2f} s "
+            f"(applied; speed-trace mismatch {offset['rms_zero']:.1f} -> "
+            f"{offset['rms_best']:.1f} km/h)"
+        )
+    why = (
+        "no reliable offset found (hit the edge of the search range)"
+        if offset["at_edge"]
+        else f"clocks looked consistent (fit gain only {offset['gain']:.0%})"
+    )
+    return f"Telemetry clock offset: none applied - {why}"
+
+
 def describe_sector_check(checks: list[dict]) -> tuple[str, float]:
     """One-line summary of the sector-split check, and the worst error."""
     text = "; ".join(
@@ -191,6 +208,9 @@ def main() -> None:
             f"Official lap times: {d} {times[d]:.3f} s, {r} {times[r]:.3f} s "
             f"(gap {times[d] - times[r]:+.3f} s)\n"
         )
+    offset_line = describe_clock_offset(result.get("clock_offset"))
+    if offset_line:
+        print(offset_line)
     checks = result.get("sector_check")
     if checks:
         text, worst = describe_sector_check(checks)

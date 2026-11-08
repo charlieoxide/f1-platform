@@ -1,3 +1,8 @@
+> **Note:** this guide was written at the start of the project. The system as built
+> differs in places (the driver coach is deterministic signal processing on OpenF1
+> telemetry, not an LSTM trained on Colab; there is no ONNX dependency). For what is
+> current, see `README.md` and `docs/DECISIONS.md`.
+
 # F1 Unified Platform — Study Guide
 
 This explains *what* we're building, *why* each piece exists, and the

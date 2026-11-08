@@ -7,6 +7,7 @@ from src.coach import (
     compare_laps,
     find_braking_zones,
     normalize_telemetry,
+    speed_mismatch_rms,
 )
 
 VMAX = 300.0
@@ -211,3 +212,12 @@ def test_differences_below_sample_spacing_are_not_reported() -> None:
 def test_resolution_is_taken_from_the_telemetry_spacing() -> None:
     result = compare_laps(make_lap(REF, step=20.0), make_lap(REF, step=20.0))
     assert result["resolution_m"] == pytest.approx(20.0, abs=0.5)
+
+
+def test_speed_mismatch_rms_is_zero_for_identical_laps_and_grows_with_a_shift() -> None:
+    lap = make_lap(REF)
+    shifted = lap.assign(
+        Distance=lap["Distance"] + np.where(lap["Distance"] > 100, 15, 0)
+    )
+    assert speed_mismatch_rms(lap, lap) == pytest.approx(0.0, abs=1e-9)
+    assert speed_mismatch_rms(shifted, lap) > 1.0

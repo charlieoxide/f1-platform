@@ -7,6 +7,7 @@ from src.telemetry import (
     circuit_corners,
     coach_report,
     count_drivers_with_telemetry,
+    describe_clock_offset,
     describe_sector_check,
     fastest_lap_telemetry,
     trace_table,
@@ -164,3 +165,25 @@ def test_trace_table_shows_only_the_window_around_the_spot() -> None:
     distances = [float(row.split()[0]) for row in lines[1:]]
     assert min(distances) >= 1190 and max(distances) <= 1270
     assert 1230.0 in distances
+
+
+def test_describe_clock_offset_covers_applied_unapplied_and_missing() -> None:
+    applied = {
+        "lag_s": 0.153,
+        "applied": True,
+        "at_edge": False,
+        "gain": 0.8,
+        "rms_zero": 9.7,
+        "rms_best": 2.2,
+    }
+    assert "+0.15 s" in describe_clock_offset(
+        applied
+    ) and "applied" in describe_clock_offset(applied)
+    edge = {**applied, "applied": False, "at_edge": True}
+    assert "none applied" in describe_clock_offset(
+        edge
+    ) and "edge" in describe_clock_offset(edge)
+    flat = {**applied, "applied": False, "gain": 0.01}
+    assert "consistent" in describe_clock_offset(flat)
+    assert describe_clock_offset(None) == ""
+    assert describe_clock_offset({"rms_zero": None}) == ""

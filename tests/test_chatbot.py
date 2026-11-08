@@ -8,6 +8,7 @@ from src.chatbot import (
     is_safe_select,
     run_query_safe,
 )
+from src.dbutil import readonly_uri
 
 
 @pytest.mark.parametrize(
@@ -59,7 +60,7 @@ def test_readonly_connection_blocks_writes_even_bypassing_validation(tmp_path) -
     the way run_query_safe does, and prove a write fails at the DB level
     even without going through is_safe_select at all."""
     db_path = _make_temp_db(tmp_path)
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = sqlite3.connect(readonly_uri(db_path), uri=True)
     try:
         with pytest.raises(sqlite3.OperationalError):
             conn.execute("DELETE FROM laps")

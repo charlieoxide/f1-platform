@@ -27,3 +27,4 @@ models/*.pt
 .env.swp
 .venv/
 *.db
+*.swp

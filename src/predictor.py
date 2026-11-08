@@ -10,13 +10,13 @@ that make this a genuinely hard prediction problem.
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 
 import pandas as pd
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error
 
 from src.config import settings
+from src.dbutil import readonly_uri
 
 FEATURE_COLUMNS = ["grid_position", "recent_avg_finish"]
 TARGET_COLUMN = "position"
@@ -25,8 +25,7 @@ TARGET_COLUMN = "position"
 def load_race_results(db_path: str | None = None) -> pd.DataFrame:
     """Race (not qualifying) results only, with event_date for ordering.
     Read-only connection — this module never writes to the DB."""
-    resolved = Path(db_path or settings.db_path).resolve()
-    conn = sqlite3.connect(f"file:{resolved}?mode=ro", uri=True)
+    conn = sqlite3.connect(readonly_uri(db_path or settings.db_path), uri=True)
     try:
         df = pd.read_sql_query(
             "SELECT session_key, driver, event_date, grid_position, position "

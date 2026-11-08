@@ -13,7 +13,9 @@ from src.openf1 import (
     _http_get,
     build_lap_frame,
     coach_report_openf1,
+    estimate_clock_offset,
     fastest_lap,
+    lap_frame,
     resolve_driver,
     resolve_session,
     sector_check,
@@ -21,6 +23,8 @@ from src.openf1 import (
 from tests.test_coach import REF, make_lap
 
 T0 = datetime(2024, 5, 25, 14, 0, 0, tzinfo=timezone.utc)
+REF2 = [(600, 700, 100, 730), (1400, 1500, 100, 1530)]
+DRV2 = [(610, 700, 100, 730), (1400, 1500, 100, 1530)]
 
 
 @pytest.fixture(autouse=True)
@@ -309,26 +313,89 @@ def test_coarse_sampling_still_finds_a_clear_braking_difference() -> None:
     assert "later than the reference" in c.message
 
 
-def test_coach_report_openf1_wires_everything_together(monkeypatch) -> None:
+def test_coach_report_openf1_finds_and_removes_a_telemetry_clock_offset(
+    monkeypatch,
+) -> None:
+    """End to end on simulated data: the driver's telemetry runs 0.13 s late.
+    The report must detect that, apply it, and pass the sector-split check
+    that the uncorrected laps fail."""
+    from tests.sim import lap_record, sample
+
+    ref_corners = [(600, 700, 100, 730), (1400, 1500, 100, 1530)]
+    drv_corners = [(610, 700, 100, 730), (1400, 1500, 100, 1530)]
+    ref_rows, ref_t, rt, rs = sample(make_lap(ref_corners))
+    drv_rows, drv_t, dt, ds = sample(make_lap(drv_corners), lag=0.13, phase=0.07)
+    fetched = {
+        1: (ref_rows, lap_record(ref_t, rt, rs)),
+        4: (drv_rows, lap_record(drv_t, dt, ds)),
+    }
     monkeypatch.setattr(
-        "src.openf1.resolve_session", lambda y, e, s: {"session_key": 9519}
+        "src.openf1.resolve_session", lambda y, e, s: {"session_key": 1}
     )
     monkeypatch.setattr(
         "src.openf1.resolve_driver", lambda key, d: {"NOR": 4, "VER": 1}[d]
     )
-    as_float = lambda df: df.assign(Brake=df["Brake"].astype(float))  # noqa: E731
-    laps = {
-        4: (as_float(make_lap([(615, 700, 100, 730)])), {"lap_duration": 71.4}),
-        1: (as_float(make_lap(REF)), {"lap_duration": 71.6}),
-    }
-    monkeypatch.setattr("src.openf1.lap_telemetry", lambda key, num: laps[num])
+    monkeypatch.setattr("src.openf1.fetch_lap_samples", lambda key, num: fetched[num])
 
     result = coach_report_openf1("2024 Monaco Q", "nor", "ver")
-    assert result["lap_times_s"] == {"NOR": 71.4, "VER": 71.6}
-    assert result["corners"]
-    assert result["sector_check"] == []  # no sector splits supplied -> no check
+
+    assert result["clock_offset"]["applied"]
+    assert result["clock_offset"]["lag_s"] == pytest.approx(0.13, abs=0.04)
+    assert set(result["lap_times_s"]) == {"NOR", "VER"}
+    assert len(result["sector_check"]) == 2
+    for c in result["sector_check"]:
+        assert c["coach_s"] == pytest.approx(c["official_s"], abs=0.06)
     with pytest.raises(ValueError, match="two different drivers"):
         coach_report_openf1("2024 Monaco Q", "NOR", "nor")
+
+
+@pytest.mark.parametrize("lag", [0.13, 0.26, -0.15])
+def test_clock_offset_is_recovered_and_fixes_the_sector_check(lag) -> None:
+    """The real failure, reproduced: a late telemetry clock breaks the
+    sector check by 0.2+ s; estimating and removing the offset fixes it."""
+    from src.coach import compare_laps
+    from tests.sim import lap_record, sample
+
+    ref_rows, ref_t, rt, rs = sample(make_lap(REF2))
+    ref_lap = lap_record(ref_t, rt, rs)
+    ref_frame = lap_frame(ref_rows, ref_lap)
+    drv_rows, drv_t, dt, ds = sample(make_lap(DRV2), lag=lag, phase=0.07)
+    drv_lap = lap_record(drv_t, dt, ds)
+
+    def worst_error(use_lag):
+        res = compare_laps(lap_frame(drv_rows, drv_lap, use_lag), ref_frame)
+        checks = sector_check(res, ref_lap, drv_lap)
+        return max(abs(c["coach_s"] - c["official_s"]) for c in checks)
+
+    offset = estimate_clock_offset(drv_rows, drv_lap, ref_frame)
+    assert offset["applied"] and not offset["at_edge"]
+    assert offset["lag_s"] == pytest.approx(lag, abs=0.05)
+    assert worst_error(0.0) > 0.15  # uncorrected: clearly wrong
+    assert (
+        worst_error(offset["lag_s"]) < 0.06
+    )  # corrected: inside the 0.05 warning level
+
+
+def test_clock_offset_is_left_alone_when_clocks_agree() -> None:
+    from tests.sim import lap_record, sample
+
+    ref_rows, ref_t, rt, rs = sample(make_lap(REF2))
+    ref_lap = lap_record(ref_t, rt, rs)
+    offset = estimate_clock_offset(
+        ref_rows, ref_lap, lap_frame(ref_rows, ref_lap)
+    )  # a lap against itself
+    assert not offset["applied"]
+    assert abs(offset["lag_s"]) < 0.02
+
+
+def test_clock_offset_gives_up_rather_than_trust_the_edge_of_the_search() -> None:
+    from tests.sim import lap_record, sample
+
+    ref_rows, ref_t, rt, rs = sample(make_lap(REF2))
+    ref_frame = lap_frame(ref_rows, lap_record(ref_t, rt, rs))
+    drv_rows, drv_t, dt, ds = sample(make_lap(DRV2), lag=0.45)  # beyond +/-0.4 s
+    offset = estimate_clock_offset(drv_rows, lap_record(drv_t, dt, ds), ref_frame)
+    assert offset["at_edge"] and not offset["applied"]
 
 
 def _with_time(lap):
@@ -366,3 +433,28 @@ def test_sector_check_is_skipped_when_clocks_do_not_match_or_data_missing() -> N
     assert sector_check(result, {}, {}) == []  # splits missing
     wrong = {f"duration_sector_{i}": 40.0 for i in (1, 2, 3)}  # 120 s vs ~26 s lap
     assert sector_check(result, wrong, wrong) == []
+
+
+def test_probe_reports_shape_counts_and_per_endpoint_errors(monkeypatch) -> None:
+    from src.openf1 import format_probe, probe_session
+
+    monkeypatch.setattr(
+        "src.openf1.resolve_session",
+        lambda y, e, s: {"session_key": 77, "session_name": "Race"},
+    )
+
+    def fake_get(endpoint, eq=None, raw=()):
+        if endpoint == "session_result":
+            return [{"position": i, "driver_number": 10 + i} for i in range(1, 21)]
+        if endpoint == "stints":
+            raise OpenF1Error("OpenF1 returned HTTP 500.")
+        return []  # everything else: no rows
+
+    monkeypatch.setattr("src.openf1._get", fake_get)
+    text = format_probe(probe_session("2024 Monaco R"))
+
+    assert "== session_result: 20 rows" in text
+    assert "fields: position, driver_number" in text
+    assert text.count('{"position"') == 3  # only the first 3 rows are shown
+    assert "== stints: 0 rows - ERROR: OpenF1 returned HTTP 500." in text
+    assert "== starting_grid: 0 rows" in text  # empty is reported, not hidden

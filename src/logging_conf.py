@@ -25,7 +25,9 @@ class RedactingFilter(logging.Filter):
 
 
 def setup_logging(log_path: str = "data/app.log") -> None:
-    handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=3)
+    handler = RotatingFileHandler(
+        log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+    )
     handler.addFilter(RedactingFilter())
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     handler.setFormatter(formatter)
