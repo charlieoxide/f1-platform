@@ -27,6 +27,13 @@ MAX_ATTEMPTS = 3
 MIN_SUMMARY_CHARS = 60
 
 
+def _finished(status: str) -> bool:
+    """A car a lap or more down is classified ('+1 Lap', 'Lapped'): it
+    finished, it did not retire."""
+    s = status.strip()
+    return s == "Finished" or s.startswith("+") or s.lower() == "lapped"
+
+
 def get_race_facts(session_key: str, db_path: str | None = None) -> dict:
     """Pull the structured facts a race summary is grounded in. Read-only
     connection, same pattern as the chatbot module."""
@@ -54,7 +61,7 @@ def get_race_facts(session_key: str, db_path: str | None = None) -> dict:
         dnf_count = sum(
             1
             for r in classification
-            if r["position"] is None or (r["status"] and r["status"] != "Finished")
+            if r["position"] is None or (r["status"] and not _finished(r["status"]))
         )
 
         return {

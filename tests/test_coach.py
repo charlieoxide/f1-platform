@@ -205,7 +205,8 @@ def test_differences_below_sample_spacing_are_not_reported() -> None:
         brake_min_m=20.0,
         throttle_min_m=20.0,
     )
-    assert "braking" not in _describe(brake_delta=10.0, **kwargs)
+    below = _describe(brake_delta=10.0, **kwargs)
+    assert "10 m" not in below and "later than the reference" not in below
     assert "braking 30 m later" in _describe(brake_delta=30.0, **kwargs)
 
 
@@ -221,3 +222,32 @@ def test_speed_mismatch_rms_is_zero_for_identical_laps_and_grows_with_a_shift() 
     )
     assert speed_mismatch_rms(lap, lap) == pytest.approx(0.0, abs=1e-9)
     assert speed_mismatch_rms(shifted, lap) > 1.0
+
+
+def test_driver_braking_zone_goes_to_the_nearest_reference_zone_only() -> None:
+    """The suspicious real-data line: 'braking 75 m later' sat exactly on the
+    edge of the matching window. A driver zone starting at 675 is 25 m from
+    the reference zone at 700 and 75 m from the one at 600: it belongs to 700."""
+    ref = make_lap([(600, 700, 100, 730)])
+    drv = ref.copy()
+    ref["Brake"] = ((ref["Distance"] >= 600) & (ref["Distance"] < 650)) | (
+        (ref["Distance"] >= 700) & (ref["Distance"] < 750)
+    )
+    drv["Brake"] = (drv["Distance"] >= 675) & (drv["Distance"] < 750)
+
+    by_start = {round(c.ref_brake_m): c for c in compare_laps(drv, ref)["corners"]}
+    assert by_start[700].brake_status == "matched"
+    assert by_start[700].brake_delta_m == pytest.approx(-25, abs=5)
+    assert by_start[600].brake_status == "none"
+    assert "75 m later" not in by_start[600].message
+
+
+def test_a_time_difference_with_no_visible_cause_is_not_called_in_line() -> None:
+    """Real output said 'in line with the reference (+0.10 s)'. 0.10 s is not
+    in line; say the cause isn't visible in the data instead."""
+    ref = _with_time(make_lap(REF))
+    drv = ref.assign(Time=ref["Time"] + 0.2 * (ref["Distance"] > 650))
+    corner = compare_laps(drv, ref)["corners"][0]
+    assert "in line" not in corner.message
+    assert "no braking, apex or throttle difference" in corner.message
+    assert corner.time_delta_s == pytest.approx(0.2, abs=0.03)

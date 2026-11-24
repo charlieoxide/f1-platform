@@ -59,6 +59,18 @@ class OpenF1Error(RuntimeError):
 # ---------------------------------------------------------------- HTTP layer
 
 
+_MIN_INTERVAL_S = 0.35  # a free public API: don't hammer it during bulk ingestion
+_last_call = 0.0
+
+
+def _throttle() -> None:
+    global _last_call
+    wait = _MIN_INTERVAL_S - (time.monotonic() - _last_call)
+    if wait > 0:
+        time.sleep(wait)
+    _last_call = time.monotonic()
+
+
 def _http_get(url: str) -> tuple[int, bytes]:
     """GET using urllib on purpose: it sends the URL exactly as written.
     httpx percent-encodes the '>' and '<' in OpenF1's date filters, and the
@@ -113,6 +125,7 @@ def _get(endpoint: str, eq: dict | None = None, raw: list[str] | tuple = ()):
         return cached
 
     for attempt in range(MAX_RETRIES):
+        _throttle()
         status, body = _http_get(url)
         if status != 429:
             break

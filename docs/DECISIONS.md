@@ -107,3 +107,23 @@ two-lap comparison needs. The fit also absorbs a little of any consistent
 real braking difference (~0.02 s bias in simulation). The sector-split check
 remains the independent test of whether the result can be trusted, and the
 UI warns when it disagrees by more than 0.05 s.
+
+## 2026-11 — Ingestion moves to OpenF1 (free); FastF1 becomes optional
+
+**Finding:** FastF1 3.9 reads F1's timing server through an F1 account and its own
+error says an active F1TV subscription is required; without it the server answers
+HTTP 401. A paid subscription breaks this project's "free tools" rule and means a
+fresh clone could never get data.
+
+**Decision:** `python -m src.ingest` defaults to OpenF1 (`--source fastf1` keeps the old
+path). Probed against real 2024 Monaco data first: OpenF1 returns the same 1237 race
+laps FastF1 gave, plus official points. Mapping choices: stints are assigned by
+`lap_start` only, because OpenF1 returns `lap_end: 0` for some stints; a car a lap down is
+"+N Lap", not a retirement; and `starting_grid` was empty for the race session, so grid
+positions fall back to the qualifying classification (penalties not reflected) and the
+ingest output says which source was used. Stored results are never replaced by an
+empty answer.
+
+**Also fixed on the way:** the summariser counted "+1 Lap" finishers as retirements, and
+two API tests failed on any machine whose local `.env` set `F1_API_KEY` (tests now ignore
+the developer's `.env`; the API-key and rate-limit paths now have their own tests).

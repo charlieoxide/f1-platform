@@ -51,13 +51,13 @@ python tasks.py dashboard
 ## Data
 
 - **Laps and results** are stored in a local SQLite file (`data/f1.db`), which is
-  **not in git**: a fresh clone starts empty.
-- **Ingestion currently uses FastF1, which now needs a paid F1TV subscription.**
-  F1 moved its timing server behind an F1 account (without one it answers HTTP 401).
-  FastF1 3.9+ can sign in for you: run `python -m fastf1 auth --authenticate` and enter your
-  own F1 account details when prompted. Without an active F1TV subscription, new sessions
-  cannot be downloaded this way; existing data is unaffected. Moving ingestion to OpenF1
-  (free) is the planned fix.
+  **not in git**: a fresh clone starts empty. Fill it for free with
+  `python tasks.py ingest-season 2024` (about a minute; no account or key).
+- **Ingestion uses OpenF1 (free, no account).** Starting grid comes from OpenF1's
+  `starting_grid` when it has data, otherwise from the qualifying classification (which
+  ignores grid penalties); the ingest command prints which one was used. FastF1 is still
+  available with `--source fastf1`, but F1 now requires a paid F1TV subscription for it
+  (`python -m fastf1 auth --authenticate`).
 - **The driver coach uses OpenF1** (free API, no key) for telemetry, so it works
   on a fresh clone with no database at all.
 
@@ -81,7 +81,8 @@ in `docs/SECURITY.md`.
 
 ## Known limitations
 
-- Ingesting new sessions needs an F1TV subscription until ingestion moves to OpenF1 (above).
+- OpenF1 has no retirement reasons (statuses are Finished / +N Lap / DNF / DNS / DSQ) and its
+  grid data can be missing, in which case grid positions are approximate.
 - Telemetry is ~4 samples/second, so braking points are only good to ~10-20 m.
 - The coach cannot name corners (OpenF1 has no corner map); zones are numbered along the lap.
 - Free LLM models vary in quality; set `OPENROUTER_MODEL` in `.env` to pin one.

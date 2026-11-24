@@ -142,9 +142,9 @@ def results_to_records(
     return records, skipped
 
 
-def ingest_laps(session_key: str, laps_df: pd.DataFrame) -> int:
-    records, skipped = laps_to_records(session_key, laps_df)
-    # One transaction: replace this session's laps atomically.
+def write_laps(session_key: str, records: list[LapRecord], skipped: int = 0) -> int:
+    """One transaction: replace this session's laps atomically. Shared by
+    every ingestion source, so they all write the same way."""
     with SessionLocal.begin() as db:
         db.execute(delete(Lap).where(Lap.session_key == session_key))
         db.add_all(Lap(**r.model_dump()) for r in records)
@@ -152,6 +152,23 @@ def ingest_laps(session_key: str, laps_df: pd.DataFrame) -> int:
         "Ingested %d laps (%d skipped) for %s", len(records), skipped, session_key
     )
     return len(records)
+
+
+def write_results(
+    session_key: str, records: list[ResultRecord], skipped: int = 0
+) -> int:
+    with SessionLocal.begin() as db:
+        db.execute(delete(Result).where(Result.session_key == session_key))
+        db.add_all(Result(**r.model_dump()) for r in records)
+    logger.info(
+        "Ingested %d results (%d skipped) for %s", len(records), skipped, session_key
+    )
+    return len(records)
+
+
+def ingest_laps(session_key: str, laps_df: pd.DataFrame) -> int:
+    records, skipped = laps_to_records(session_key, laps_df)
+    return write_laps(session_key, records, skipped)
 
 
 def ingest_results(
@@ -163,13 +180,7 @@ def ingest_results(
     records, skipped = results_to_records(
         session_key, session_type, results_df, event_date=event_date
     )
-    with SessionLocal.begin() as db:
-        db.execute(delete(Result).where(Result.session_key == session_key))
-        db.add_all(Result(**r.model_dump()) for r in records)
-    logger.info(
-        "Ingested %d results (%d skipped) for %s", len(records), skipped, session_key
-    )
-    return len(records)
+    return write_results(session_key, records, skipped)
 
 
 def main() -> None:
@@ -178,7 +189,23 @@ def main() -> None:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--session", required=True, help="e.g. '2024 Monaco R'")
+    parser.add_argument(
+        "--source",
+        choices=["openf1", "fastf1"],
+        default="openf1",
+        help="openf1 is free; fastf1 needs an F1TV subscription (default: openf1)",
+    )
     args = parser.parse_args()
+
+    if args.source == "openf1":
+        from src.ingest_openf1 import ingest_session_openf1
+
+        summary = ingest_session_openf1(args.session)
+        print(
+            f"Done: {summary['laps']} laps, {summary['results']} results stored "
+            f"for {summary['session_key']} (grid positions: {summary['grid_source']})"
+        )
+        return
 
     year, event, session_type = parse_session_arg(args.session)
     session_key = f"{year}_{event.replace(' ', '')}_{session_type}"

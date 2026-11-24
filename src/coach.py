@@ -127,6 +127,26 @@ class CornerFeedback:
     message: str
 
 
+def _match_zone_starts(
+    ref_zones: list[tuple[float, float]],
+    drv_zones: list[tuple[float, float]],
+    tolerance: float,
+) -> dict[int, float]:
+    """Pair each driver braking zone with the reference zone whose start it is
+    NEAREST to (within tolerance). A driver zone is never given to a farther
+    reference zone, so two close zones can't both claim the same braking
+    event; a zone nobody claims is reported as unmatched, not guessed at."""
+    best: dict[int, float] = {}
+    for d_start, _ in drv_zones:
+        if not ref_zones:
+            break
+        i = min(range(len(ref_zones)), key=lambda k: abs(ref_zones[k][0] - d_start))
+        gap = abs(ref_zones[i][0] - d_start)
+        if gap <= tolerance and (i not in best or gap < abs(best[i] - ref_zones[i][0])):
+            best[i] = d_start
+    return best
+
+
 def _label_for(
     index: int, ref_apex_m: float, corners: list[tuple[str, float]] | None
 ) -> str:
@@ -172,9 +192,15 @@ def _describe(
         word = "later" if throttle_delta > 0 else "earlier"
         parts.append(f"full throttle {abs(throttle_delta):.0f} m {word}")
 
+    verb = "costing" if time_delta > 0 else "gaining"
+    if not parts and abs(time_delta) >= 0.05:
+        return (
+            f"{label}: {verb} {abs(time_delta):.2f} s with no braking, apex or "
+            "throttle difference above the data's resolution (timing alignment "
+            "is the least certain part here)."
+        )
     if not parts:
         return f"{label}: in line with the reference ({time_delta:+.2f} s)."
-    verb = "costing" if time_delta > 0 else "gaining"
     return f"{label}: {', '.join(parts)} - {verb} {abs(time_delta):.2f} s."
 
 
@@ -253,6 +279,8 @@ def compare_laps(
     r_zones = find_braking_zones(grid, r_brake)
     d_zones = find_braking_zones(grid, d_brake)
 
+    matched = _match_zone_starts(r_zones, d_zones, BRAKE_MATCH_TOLERANCE_M)
+
     feedback: list[CornerFeedback] = []
     for i, (z_start, z_end) in enumerate(r_zones):
         next_start = r_zones[i + 1][0] if i + 1 < len(r_zones) else grid[-1]
@@ -266,9 +294,8 @@ def compare_laps(
         drv_apex_m = float(grid[drv_apex_i])
         apex_delta = float(d_speed[drv_apex_i] - r_speed[ref_apex_i])
 
-        starts = [s for s, _ in d_zones if abs(s - z_start) <= BRAKE_MATCH_TOLERANCE_M]
-        if starts:
-            driver_brake = min(starts, key=lambda s: abs(s - z_start))
+        driver_brake = matched.get(i)
+        if driver_brake is not None:
             brake_status, brake_delta = "matched", float(driver_brake - z_start)
         else:
             driver_brake, brake_delta = None, None

@@ -174,3 +174,31 @@ def test_generate_summary_accepts_api_key_kwarg() -> None:
     import inspect
 
     assert "api_key" in inspect.signature(generate_summary).parameters
+
+
+def test_lapped_cars_are_not_counted_as_retirements(tmp_path) -> None:
+    db_path = str(tmp_path / "t.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE results (session_key TEXT, session_type TEXT, driver TEXT, "
+        "position INTEGER, grid_position INTEGER, points REAL, status TEXT, "
+        "event_date TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE laps (session_key TEXT, driver TEXT, lap_number INTEGER, "
+        "lap_time_seconds REAL, compound TEXT, stint INTEGER, is_personal_best INTEGER)"
+    )
+    conn.executemany(
+        "INSERT INTO results VALUES (?,?,?,?,?,?,?,?)",
+        [
+            ("k", "R", "HAM", 1, 1, 25.0, "Finished", None),
+            ("k", "R", "VER", 2, 2, 18.0, "+1 Lap", None),
+            ("k", "R", "NOR", 3, 3, 15.0, "+2 Laps", None),
+            ("k", "R", "ALB", 4, 4, 12.0, "Lapped", None),
+            ("k", "R", "PER", 19, 5, 0.0, "Accident", None),
+            ("k", "R", "LEC", 20, 6, 0.0, "DNF", None),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    assert get_race_facts("k", db_path=db_path)["dnf_count"] == 2  # PER and LEC only
