@@ -1,4 +1,4 @@
-# F1 Unified Platform(Under Devlopment If Help Me To Build Contact kolidarshan890@gmail.com as Subject Help F1)
+# F1 Unified Platform(Under Devlopment If Help Me To Build The Project kolidarshan890@gmail.com as Subject Help F1)
 
 One platform, one shared database, five F1 data/AI modules. Runs on Windows,
 macOS and Linux (CI tests all three).
