@@ -1,0 +1,4 @@
+# Keep LF line endings everywhere so shell scripts and tools behave the same on Windows and Linux.
+* text=auto eol=lf
+*.sh text eol=lf
+*.ps1 text eol=crlf
